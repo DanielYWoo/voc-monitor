@@ -21,6 +21,14 @@
 #include <Preferences.h>
 #include "config.h"
 
+#if WIFI_ENABLED
+#include <WiFi.h>
+#include "credentials.h"
+#if KLIPPER_PUSH_ENABLED
+#include <HTTPClient.h>
+#endif
+#endif
+
 // =============================================================================
 // Hardware Setup
 // =============================================================================
@@ -190,6 +198,68 @@ void loadCalibration() {
 }
 
 // =============================================================================
+// WiFi Functions (only compiled if WIFI_ENABLED)
+// =============================================================================
+#if WIFI_ENABLED
+bool wifiConnected = false;
+
+void connectWiFi() {
+    Serial.printf("Connecting to WiFi: %s\n", SSID);
+    WiFi.begin(SSID, PASSWD);
+    
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+        delay(500);
+        Serial.print(".");
+        attempts++;
+    }
+    
+    if (WiFi.status() == WL_CONNECTED) {
+        wifiConnected = true;
+        Serial.printf("\nWiFi connected! IP: %s\n", WiFi.localIP().toString().c_str());
+    } else {
+        wifiConnected = false;
+        Serial.println("\nWiFi connection failed!");
+    }
+}
+
+#if KLIPPER_PUSH_ENABLED
+unsigned long lastKlipperPush = 0;
+
+void pushToKlipper() {
+    if (!wifiConnected || WiFi.status() != WL_CONNECTED) {
+        return;
+    }
+    
+    HTTPClient http;
+    String url = String("http://") + KLIPPER_HOST + ":" + KLIPPER_PORT + "/server/database/item";
+    
+    // Build JSON payload
+    String payload = "{\"namespace\":\"voc_monitor\",\"key\":\"sensor_data\",\"value\":{";
+    payload += "\"temperature\":" + String(data.temperature, 1) + ",";
+    payload += "\"humidity\":" + String(data.humidity, 1) + ",";
+    payload += "\"toluene_ppm\":" + String(data.toluenePPM, 1) + ",";
+    payload += "\"dht_valid\":" + String(data.dhtValid ? "true" : "false") + ",";
+    payload += "\"calibrated\":" + String(data.calibrated ? "true" : "false") + ",";
+    payload += "\"timestamp\":" + String(millis());
+    payload += "}}";
+    
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+    
+    int httpCode = http.POST(payload);
+    if (httpCode > 0) {
+        Serial.printf("Klipper push: %d\n", httpCode);
+    } else {
+        Serial.printf("Klipper push failed: %s\n", http.errorToString(httpCode).c_str());
+    }
+    
+    http.end();
+}
+#endif // KLIPPER_PUSH_ENABLED
+#endif // WIFI_ENABLED
+
+// =============================================================================
 // Display Functions
 // =============================================================================
 void drawMainScreen() {
@@ -252,7 +322,7 @@ void drawStatusScreen() {
     snprintf(buf, sizeof(buf), "Uptime: %lum %lus", s / 60, s % 60);
     u8g2.drawStr(2, 49, buf);
     
-    u8g2.drawStr(2, 61, "Hold BTN 3s to calibrate");
+    u8g2.drawStr(2, 61, "BTN: cycle screens");
 }
 
 void drawScreenOff() {
@@ -289,12 +359,23 @@ void setup() {
     analogReadResolution(12);
     analogSetAttenuation(ADC_11db);
     
-    // Load calibration from NVS
+    // Load calibration from NVS (or run calibration if CALIBRATION_MODE is defined)
+    #ifdef CALIBRATION_MODE
+    Serial.println("*** CALIBRATION MODE - Running calibration on boot ***");
+    delay(2000);  // Give sensor time to warm up
+    calibrateMQ135();
+    #else
     loadCalibration();
+    #endif
     
     // Display
     u8g2.begin();
     u8g2.setContrast(255);
+    
+    // WiFi (if enabled)
+    #if WIFI_ENABLED
+    connectWiFi();
+    #endif
     
     // Initial read
     delay(2000);
@@ -302,28 +383,14 @@ void setup() {
     updateDisplay();
     
     Serial.println("Ready. Press button to cycle screens.");
-    Serial.println("Hold button 3s in clean air to calibrate MQ135.\n");
+    Serial.println("To calibrate: uncomment CALIBRATION_MODE in config.h and re-upload.\n");
 }
 
 // =============================================================================
-// Main Loop - Uses light sleep for power efficiency
+// Main Loop
 // =============================================================================
 void loop() {
     static unsigned long lastRead = 0;
-    static unsigned long buttonHoldStart = 0;
-    
-    // Check for long press (calibration)
-    if (digitalRead(BUTTON_PIN) == LOW) {
-        if (buttonHoldStart == 0) {
-            buttonHoldStart = millis();
-        } else if (millis() - buttonHoldStart > 3000) {
-            calibrateMQ135();
-            buttonHoldStart = 0;
-            delay(500);
-        }
-    } else {
-        buttonHoldStart = 0;
-    }
     
     // Read sensors periodically
     if (millis() - lastRead >= SENSOR_READ_INTERVAL) {
@@ -331,6 +398,14 @@ void loop() {
         readSensors();
         updateDisplay();
     }
+    
+    // Push to Klipper periodically (if enabled)
+    #if WIFI_ENABLED && KLIPPER_PUSH_ENABLED
+    if (millis() - lastKlipperPush >= KLIPPER_PUSH_INTERVAL) {
+        lastKlipperPush = millis();
+        pushToKlipper();
+    }
+    #endif
     
     // Update display on screen change
     if (screenChanged) {

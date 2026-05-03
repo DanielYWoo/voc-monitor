@@ -481,23 +481,77 @@ Tol:2.5ppm
 
 ### 3.3 Screen 2: Status Screen
 
-All WiFi, connectivity, and system status on this page:
+System diagnostics, calibration status, and sensor health information:
 
 ```
-┌────────────────────────────┐
-│ SYSTEM STATUS              │  Line 1: Header
-├────────────────────────────┤
-│ WiFi: Connected            │  Line 2: WiFi status
-│ IP: 192.168.1.105          │  Line 3: Device IP address
-│                            │  Line 4: (blank)
-│ Klipper Push: Enabled      │  Line 5: Push flag
-│ Host: 192.168.1.100        │  Line 6: Klipper host/IP
-│ Last: OK                   │  Line 7: Last push result
-│ Free Mem: 142384           │  Line 8: Free heap memory
-└────────────────────────────┘
+┌────────────────────────────────┐  ← Frame border (drawFrame)
+│STATUS                          │  Y=7:  Header
+├────────────────────────────────┤  Y=9:  Horizontal separator (drawHLine)
+│DHT11: OK                       │  Y=17: DHT11 sensor status
+│MQ135 Ro: 10.00 kOhm            │  Y=25: MQ135 baseline resistance
+│Calibrated: No                  │  Y=33: Calibration flag
+│Heap: 245632 bytes              │  Y=41: Free heap memory
+│Uptime: 125m 34s                │  Y=49: Time since boot
+│                                │
+│BTN: cycle screens              │  Y=61: User instruction
+└────────────────────────────────┘
+        128 × 64 pixels (using 4x6 font)
 ```
+
+**Character Count Verification (4x6 font = 32 chars max per line):**
+
+| Line | Content Example | Max Chars | Status |
+|------|-----------------|-----------|--------|
+| 1 | `STATUS` | 6 | ✓ |
+| 2 | `DHT11: ERROR` | 12 | ✓ |
+| 3 | `MQ135 Ro: 99.99 kOhm` | 20 | ✓ |
+| 4 | `Calibrated: Yes` | 15 | ✓ |
+| 5 | `Heap: 999999 bytes` | 18 | ✓ |
+| 6 | `Uptime: 999m 59s` | 16 | ✓ |
+| 7 | `BTN: cycle screens` | 18 | ✓ |
+
+**Screen Elements:**
+- **Frame**: 1px border around entire screen (0,0 to 128,64)
+- **Header**: "STATUS" at top-left
+- **Separator**: Horizontal line at Y=9
+- **DHT11 Status**: Shows "OK" if valid reading, "ERROR" if sensor failed
+- **MQ135 Ro**: Baseline resistance value (calibrated or default 10kΩ)
+- **Calibrated**: "Yes" if user performed calibration, "No" if using default
+- **Heap**: Free memory in bytes (ESP32 health indicator)
+- **Uptime**: Minutes and seconds since boot
+- **Instruction**: Button cycles through screens
 
 **Verdict: FITS** ✓
+
+### 3.3.1 Sensor Calibration Requirements
+
+| Sensor | User Calibration | Frequency | Method |
+|--------|------------------|-----------|--------|
+| **DHT11** | ❌ Not needed | N/A | Factory calibrated, ±2°C / ±5% RH accuracy |
+| **MQ135** | ✅ Required | Once (or yearly) | Compile-time flag, run in clean air |
+| **ENS160** | ⚠️ Auto | Every power-on | Self-calibrates over ~1 hour, no user action |
+| **AHT20** | ❌ Not needed | N/A | Factory calibrated, ±0.3°C / ±2% RH accuracy |
+
+**MQ135 Calibration Procedure:**
+1. Ensure sensor has completed 24-48h burn-in period (first use only)
+2. Place device in clean air environment
+3. Uncomment `#define CALIBRATION_MODE` in `config.h`
+4. Upload firmware → calibration runs automatically on boot (~5 seconds)
+5. Comment out `CALIBRATION_MODE` and re-upload for normal operation
+6. Calibration value (Ro) persists in NVS across reboots
+
+**ENS160 Auto-Calibration:**
+- Uses built-in baseline algorithm
+- Takes ~1 hour after power-on to stabilize
+- Learns environment over 24 hours for best accuracy
+- No user intervention required
+- Optional: Save/restore baseline to NVS for faster startup (future enhancement)
+
+**Why MQ135 Needs Manual Calibration:**
+- Analog sensor with no built-in intelligence
+- Baseline resistance (Ro) varies between individual sensors
+- Environmental factors affect baseline
+- Sensor degrades over 2-5 years of use
 
 ### 3.4 Screen State Machine
 

@@ -40,4 +40,14 @@ MQ135 Analog	GPIO 32 / 33	Requires Voltage Divider (5V to 3.3V)
 DS18B20 Data	GPIO 25	Requires 4.7k Pull-up
 User Button	GPIO 26	To GND (Input Pullup)
 
+4. Calibration
+
+Sensor	Calibration Needed?
+DHT11	❌ No	N/A	Factory calibrated, no user calibration possible
+MQ135	✅ Yes	Once (or yearly)	Needs baseline Ro in clean air
+ENS160	⚠️ Auto	Every power-on	Self-calibrates over 1 hour, no user action needed
+AHT20	❌ No	N/A	Factory calibrated, no user calibration possible
+
+Since MQ135 needs to be calibrated every year. We use a compile time flag to put it under calibration mode for 24 hours and save the data into the ROM.
+
 This spec is used to generate the design.md

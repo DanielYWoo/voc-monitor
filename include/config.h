@@ -76,6 +76,13 @@ enum ScreenState {
 #define MQ135_RL            10.0f   // Load resistance in kOhm
 
 // -----------------------------------------------------------------------------
+// Calibration Mode
+// -----------------------------------------------------------------------------
+// Uncomment to run MQ135 calibration on boot (one-time use in clean air)
+// After calibration, comment out and re-upload for normal operation
+// #define CALIBRATION_MODE
+
+// -----------------------------------------------------------------------------
 // Timing
 // -----------------------------------------------------------------------------
 #define SENSOR_READ_INTERVAL  1000   // ms - read sensors every 1 second
@@ -83,10 +90,24 @@ enum ScreenState {
 #define BUTTON_DEBOUNCE_MS    50     // ms - button debounce time
 
 // -----------------------------------------------------------------------------
-// WiFi (Optional)
+// WiFi Configuration
 // -----------------------------------------------------------------------------
-// WiFi credentials should be in credentials.h (gitignored)
-// #define WIFI_SSID "your_ssid"
-// #define WIFI_PASSWORD "your_password"
+// Set to 1 to enable WiFi, 0 to disable
+#define WIFI_ENABLED          0
+
+// Set to 1 to push data to Klipper/Moonraker, 0 to disable
+// Requires WIFI_ENABLED = 1
+#define KLIPPER_PUSH_ENABLED  0
+
+// Klipper/Moonraker host (IP or hostname)
+#define KLIPPER_HOST          "192.168.1.100"
+#define KLIPPER_PORT          7125
+
+// Push interval (ms) - how often to send data to Klipper
+#define KLIPPER_PUSH_INTERVAL 5000
+
+// WiFi credentials are in credentials.h (gitignored):
+//   #define SSID "your_ssid"
+//   #define PASSWD "your_password"
 
 #endif // CONFIG_H
