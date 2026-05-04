@@ -2,36 +2,48 @@
 #define CONFIG_H
 
 // =============================================================================
-// VoC Monitor Configuration
+// VoC Monitor Configuration - ESP8266 ESP-12E Version
 // =============================================================================
 
 // -----------------------------------------------------------------------------
-// Pin Definitions - ESP32-WROOM-32 DevKit (38-pin)
+// Pin Definitions - NodeMCU ESP8266 / Wemos D1 Mini
 // -----------------------------------------------------------------------------
 
-// ST7920 LCD (128x64) - Hardware SPI Mode
-// Based on: https://www.instructables.com/ST7920-128X64-LCD-Display-to-ESP32/
-#define LCD_SCK   18    // Clock (E pin) - ESP32 VSPI CLK
-#define LCD_MOSI  23    // Data (R/W pin) - ESP32 VSPI MOSI
-#define LCD_CS    5     // Chip Select (RS pin) - ESP32 VSPI CS
-// LCD_RST is tied to 5V (no GPIO needed)
+// ILI9341 TFT (320x240) - Hardware SPI Mode
+// Reference: https://www.lcdwiki.com/2.2inch_SPI_Module_ILI9341_SKU:MSP2202
+// NodeMCU Hardware SPI: D5=GPIO14(SCK), D6=GPIO12(MISO), D7=GPIO13(MOSI)
+//
+// Option A: CS tied to GND (recommended - saves GPIO15)
+#define TFT_CS    -1    // CS tied to GND (always selected, saves 1 GPIO)
+// Option B: CS controlled by GPIO (uncomment if using multiple SPI devices)
+// #define TFT_CS    15    // Chip Select - D8 (GPIO15)
+//
+#define TFT_RST    2    // Reset - D4 (GPIO2), must be HIGH at boot
+#define TFT_DC     0    // Data/Command - D3 (GPIO0), must be HIGH at boot
+#define TFT_MOSI  13    // Hardware SPI MOSI - D7 (GPIO13)
+#define TFT_SCLK  14    // Hardware SPI Clock - D5 (GPIO14)
+// #define TFT_MISO  12    // Hardware SPI MISO - D6 (GPIO12), not needed if not reading
+// TFT LED (backlight) is tied to 3.3V (always on)
 
-// I2C Bus 1 - Chamber sensors (ENS160 + AHT20)
-#define I2C1_SDA  21
-#define I2C1_SCL  22
+// I2C Bus - ENS160 + AHT20
+// NodeMCU pins: D1=GPIO5 (SCL), D2=GPIO4 (SDA)
+#define I2C_SDA   4     // D2
+#define I2C_SCL   5     // D1
 
-// I2C Bus 2 - Room sensors (ENS160 + AHT20)
-#define I2C2_SDA  16
-#define I2C2_SCL  17
+// Analog Input - MQ135
+// ESP8266 has only ONE ADC pin (A0), range 0-1V
+#define MQ135_PIN A0    // Analog input (use voltage divider!)
 
-// Analog Input
-#define MQ135_PIN 32    // MQ135 analog output (via voltage divider)
+// DHT11 Backup sensor
+// NodeMCU pin: D0=GPIO16 (moved from D4 which is now used by TFT_RST)
+#define DHT11_PIN 16    // D0 - Note: No internal pull-up, add external 4.7k pull-up
 
-// DHT11 Backup sensor (Room)
-#define DHT11_PIN 33    // DHT11 data pin
-
-// User Input
-#define BUTTON_PIN 26   // Tactile button (active LOW with internal pull-up)
+// User Input - Button
+// Note: D3 (GPIO0) is now used by TFT_DC
+// Using the FLASH button on NodeMCU (directly connected to GPIO0)
+// Or connect external button to TX (GPIO1) if serial not needed
+#define BUTTON_PIN 1    // TX (GPIO1) - only if serial monitor not needed
+// Alternative: Use GPIO16 (D0) if DHT11 not used, or omit button
 
 // -----------------------------------------------------------------------------
 // I2C Addresses
@@ -42,8 +54,8 @@
 // -----------------------------------------------------------------------------
 // Display Settings
 // -----------------------------------------------------------------------------
-#define SCREEN_WIDTH  128
-#define SCREEN_HEIGHT 64
+#define SCREEN_WIDTH  320
+#define SCREEN_HEIGHT 240
 
 // Screen states
 enum ScreenState {
@@ -75,6 +87,13 @@ enum ScreenState {
 // MQ135 calibration
 #define MQ135_RO_CLEAN_AIR  9.83f   // Ro in clean air (calibrate for your sensor)
 #define MQ135_RL            10.0f   // Load resistance in kOhm
+
+// ESP8266 ADC specifics
+// ADC range is 0-1V (10-bit = 0-1023)
+// Voltage divider: 100k + 22k gives 0.9V max from 5V input
+#define MQ135_ADC_MAX       1023    // 10-bit ADC
+#define MQ135_ADC_VREF      1.0f    // ESP8266 ADC reference voltage
+#define MQ135_DIVIDER_RATIO 5.545f  // (100k + 22k) / 22k = 5.545
 
 // -----------------------------------------------------------------------------
 // Calibration Mode

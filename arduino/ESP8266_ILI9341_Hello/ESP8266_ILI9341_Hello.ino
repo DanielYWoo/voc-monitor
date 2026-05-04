@@ -1,6 +1,16 @@
 /**
  * ESP8266 + ILI9341 2.2" TFT Hello World
- * Using Adafruit ILI9341 library
+ * For Arduino IDE
+ * 
+ * Required Libraries (install via Library Manager):
+ *   - Adafruit GFX Library
+ *   - Adafruit ILI9341
+ * 
+ * Board Settings in Arduino IDE:
+ *   - Board: "NodeMCU 1.0 (ESP-12E Module)" or "LOLIN(WEMOS) D1 R2 & mini"
+ *   - Upload Speed: 921600
+ *   - CPU Frequency: 80 MHz
+ *   - Flash Size: 4MB (FS:2MB OTA:~1019KB)
  * 
  * ILI9341 TFT Wiring:
  *   VCC  -> 3V3
@@ -14,12 +24,11 @@
  *   MISO -> NC (not connected)
  */
 
-#include <Arduino.h>
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_ILI9341.h>
 
-// Pin definitions
+// Pin definitions for NodeMCU ESP8266
 #define TFT_CS   15  // D8 = GPIO15
 #define TFT_DC    0  // D3 = GPIO0
 #define TFT_RST   2  // D4 = GPIO2
@@ -58,8 +67,8 @@ void setup() {
     tft.begin();
     Serial.println("  tft.begin() done");
     
-    // Set rotation
-    tft.setRotation(1);  // Landscape
+    // Set rotation (1 = landscape, 320x240)
+    tft.setRotation(1);
     Serial.println("  setRotation(1) done");
     
     // Test with colors
@@ -112,5 +121,5 @@ void loop() {
         x = (x + 5) % 300;
         tft.fillRect(x, 220, 20, 10, ILI9341_YELLOW);
     }
-    yield();
+    yield();  // ESP8266 watchdog
 }
