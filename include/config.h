@@ -2,36 +2,32 @@
 #define CONFIG_H
 
 // =============================================================================
-// VoC Monitor Configuration
+// VoC Monitor Configuration - ESP8266 (NodeMCU)
 // =============================================================================
 
 // -----------------------------------------------------------------------------
-// Pin Definitions - ESP32-WROOM-32 DevKit (38-pin)
+// Pin Definitions - NodeMCU v3 (ESP-12E)
 // -----------------------------------------------------------------------------
 
-// ST7920 LCD (128x64) - Hardware SPI Mode
-// Based on: https://www.instructables.com/ST7920-128X64-LCD-Display-to-ESP32/
-#define LCD_SCK   18    // Clock (E pin) - ESP32 VSPI CLK
-#define LCD_MOSI  23    // Data (R/W pin) - ESP32 VSPI MOSI
-#define LCD_CS    5     // Chip Select (RS pin) - ESP32 VSPI CS
-// LCD_RST is tied to 5V (no GPIO needed)
+// ST7920 LCD (128x64) - Software SPI Mode
+#define LCD_CLK   16    // Clock (E pin) - D0
+#define LCD_DATA  13    // Data (R/W pin) - D7
+#define LCD_CS    15    // Chip Select (RS pin) - D8
+#define LCD_RST   2     // Reset pin - D4
 
-// I2C Bus 1 - Chamber sensors (ENS160 + AHT20)
-#define I2C1_SDA  21
-#define I2C1_SCL  22
+// I2C Bus 1 - Hardware I2C - Chamber sensors (ENS160 + AHT20)
+#define I2C1_SDA  4     // D2
+#define I2C1_SCL  5     // D1
 
-// I2C Bus 2 - Room sensors (ENS160 + AHT20)
-#define I2C2_SDA  16
-#define I2C2_SCL  17
-
-// Analog Input
-#define MQ135_PIN 32    // MQ135 analog output (via voltage divider)
-
-// DHT11 Backup sensor (Room)
-#define DHT11_PIN 33    // DHT11 data pin
+// I2C Bus 2 - Software I2C - Room sensors (ENS160 + AHT20)
+#define I2C2_SDA  12    // D6
+#define I2C2_SCL  14    // D5
 
 // User Input
-#define BUTTON_PIN 26   // Tactile button (active LOW with internal pull-up)
+#define BUTTON_PIN 0    // D3 - FLASH button (active LOW with internal pull-up)
+
+// LCD Backlight Control
+#define LCD_BACKLIGHT 3 // D9/RX - Backlight control (HIGH = on, LOW = off)
 
 // -----------------------------------------------------------------------------
 // I2C Addresses
@@ -47,9 +43,9 @@
 
 // Screen states
 enum ScreenState {
-    SCREEN_OFF = 0,
-    SCREEN_MAIN = 1,
-    SCREEN_STATUS = 2
+    SCREEN_MAIN = 0,       // Main sensor display (backlight ON)
+    SCREEN_STATUS = 1,     // Status/WiFi info (backlight ON)
+    SCREEN_MAIN_DARK = 2   // Main sensor display (backlight OFF)
 };
 
 // -----------------------------------------------------------------------------
@@ -61,34 +57,11 @@ enum ScreenState {
 #define ECO2_WARNING  1000    // ppm - warning threshold
 
 // -----------------------------------------------------------------------------
-// MQ135 Toluene Calibration Constants
-// -----------------------------------------------------------------------------
-#define MQ135_TOLUENE_A   44.947f   // Toluene curve coefficient a
-#define MQ135_TOLUENE_B   -3.445f   // Toluene curve exponent b
-
-// Temperature/Humidity correction constants
-#define MQ135_CORA  0.00035f
-#define MQ135_CORB  0.02718f
-#define MQ135_CORC  1.39538f
-#define MQ135_CORD  0.0018f
-
-// MQ135 calibration
-#define MQ135_RO_CLEAN_AIR  9.83f   // Ro in clean air (calibrate for your sensor)
-#define MQ135_RL            10.0f   // Load resistance in kOhm
-
-// -----------------------------------------------------------------------------
-// Calibration Mode
-// -----------------------------------------------------------------------------
-// Uncomment to run MQ135 calibration on boot (one-time use in clean air)
-// After calibration, comment out and re-upload for normal operation
-// #define CALIBRATION_MODE
-
-// -----------------------------------------------------------------------------
 // Timing
 // -----------------------------------------------------------------------------
 #define SENSOR_READ_INTERVAL  1000   // ms - read sensors every 1 second
 #define DISPLAY_UPDATE_INTERVAL 500  // ms - update display every 500ms
-#define BUTTON_DEBOUNCE_MS    50     // ms - button debounce time
+#define BUTTON_DEBOUNCE_MS    250    // ms - button debounce time (increased for reliable detection)
 
 // -----------------------------------------------------------------------------
 // WiFi Configuration

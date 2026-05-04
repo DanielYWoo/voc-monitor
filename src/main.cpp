@@ -1,88 +1,100 @@
 /**
- * VoC Monitor - Real Sensor Demo
+ * VoC Monitor - Environmental Monitoring System
  * 
- * Reads from DHT11 (temperature/humidity) and MQ135 (VOC) sensors,
+ * Reads from ENS160+AHT20 (chamber & room) sensors,
  * displays on ST7920 128x64 LCD.
  * 
- * ST7920 LCD Wiring (Hardware SPI Mode):
- *   VCC  -> 5V (pin 2)
- *   GND  -> GND (pin 1)
- *   V0   -> GND (pin 3) - max contrast
- *   RS   -> GPIO 5 (CS) (pin 4)
- *   R/W  -> GPIO 23 (MOSI) (pin 5)
- *   E    -> GPIO 18 (CLK) (pin 6)
- *   PSB  -> GND (serial mode) (pin 15)
- *   RST  -> 5V (pin 17) - tied high, no GPIO needed
- *   BLA  -> 3.3V (backlight) (pin 19)
- *   BLK  -> GND (pin 20)
+ * Platform: ESP8266 (NodeMCU v3)
  * 
- * Based on: https://www.instructables.com/ST7920-128X64-LCD-Display-to-ESP32/
+ * ST7920 LCD Wiring (Software SPI Mode):
+ *   VCC  -> VIN (5V from USB)
+ *   GND  -> GND
+ *   V0   -> Leave floating (or 10k pot)
+ *   RS   -> D8 (GPIO 15) - CS
+ *   R/W  -> D7 (GPIO 13) - Data
+ *   E    -> D0 (GPIO 16) - Clock
+ *   PSB  -> GND (serial mode)
+ *   RST  -> D4 (GPIO 2) - Reset
+ *   BLA  -> 47Ω resistor -> RX (GPIO 3) - Backlight control
+ *   BLK  -> GND
  * 
- * DHT11: VCC -> 3.3V, DATA -> GPIO 33, GND -> GND
- * MQ135: VCC -> 5V, AO -> voltage divider -> GPIO 32, GND -> GND
- * Button: GPIO 26 to GND
+ * Button: D3 (GPIO 0) to GND
+ * 
+ * Screen Cycle (button press):
+ *   1. SCREEN_MAIN      - Sensor data, backlight ON
+ *   2. SCREEN_STATUS    - WiFi/Klipper status, backlight ON
+ *   3. SCREEN_MAIN_DARK - Sensor data, backlight OFF
  */
 
 #include <Arduino.h>
 #include <U8g2lib.h>
-#include <DHT.h>
-#include <Preferences.h>
+#include <Wire.h>
+#include <SparkFun_ENS160.h>
+#include <Adafruit_AHTX0.h>
 #include "config.h"
 
 #if WIFI_ENABLED
-#include <WiFi.h>
+#include <ESP8266WiFi.h>
 #include "credentials.h"
 #if KLIPPER_PUSH_ENABLED
-#include <HTTPClient.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiClient.h>
 #endif
 #endif
 
 // =============================================================================
 // Hardware Setup
 // =============================================================================
-// ST7920 in serial mode
-// 
-// Based on: https://www.instructables.com/ST7920-128X64-LCD-Display-to-ESP32/
-// The article uses Hardware SPI with these pins:
-//   LCD RS (pin 4)  → GPIO 5  (SPI CS)
-//   LCD R/W (pin 5) → GPIO 23 (SPI MOSI) 
-//   LCD E (pin 6)   → GPIO 18 (SPI CLK) - VSPI hardware clock
-//   LCD RST (pin 17)→ 5V (tied high, no GPIO needed)
-//
-// IMPORTANT: Use Hardware SPI constructor, not Software SPI!
-// The ESP32 VSPI pins are: CLK=18, MOSI=23, CS=5
-//
-// Hardware SPI constructor (recommended for ESP32):
-// U8X8_PIN_NONE means RST is tied to VCC (no software reset needed)
-U8G2_ST7920_128X64_F_HW_SPI u8g2(U8G2_R0, /* cs=RS */ 5, /* reset */ U8X8_PIN_NONE);
+// ST7920 in serial mode - Software SPI
+U8G2_ST7920_128X64_F_SW_SPI u8g2(U8G2_R0, LCD_CLK, LCD_DATA, LCD_CS, LCD_RST);
 
-// If hardware SPI doesn't work, try software SPI with GPIO 18:
-// U8G2_ST7920_128X64_F_SW_SPI u8g2(U8G2_R0, /* clock=E */ 18, /* data=R/W */ 23, /* cs=RS */ 5, /* reset */ 22);
+// =============================================================================
+// I2C Buses and Sensors
+// =============================================================================
+// Chamber sensors use hardware I2C (Wire)
+// Room sensors use software I2C - we'll use Wire with different pins
+// Note: ESP8266 Wire library allows changing pins with Wire.begin(SDA, SCL)
 
-DHT dht(DHT11_PIN, DHT11);
-Preferences prefs;
+SparkFun_ENS160 chamberENS;
+Adafruit_AHTX0 chamberAHT;
+SparkFun_ENS160 roomENS;
+Adafruit_AHTX0 roomAHT;
+
+// Software I2C for room sensors (using bit-banging)
+// We'll implement a simple I2C scan approach
 
 // =============================================================================
 // Sensor Data
 // =============================================================================
 struct SensorData {
-    float temperature;    // °C
-    float humidity;       // %
-    bool dhtValid;        // true if reading is valid
-    float toluenePPM;     // Estimated Toluene PPM
-    int rawADC;           // Raw ADC for debugging
-    float mq135Ro;        // Baseline resistance in clean air (kΩ)
-    bool calibrated;      // true if user calibrated
+    // Chamber sensors (ENS160+AHT20)
+    int chamberTVOC;      // ppb
+    int chamberECO2;      // ppm
+    int chamberTemp;      // °C (integer)
+    int chamberHumidity;  // %
+    bool chamberValid;    // true if sensors are connected
+    
+    // Room sensors (ENS160+AHT20)
+    int roomTVOC;         // ppb
+    int roomECO2;         // ppm
+    int roomTemp;         // °C (integer)
+    int roomHumidity;     // %
+    bool roomValid;       // true if sensors are connected
 };
 
 SensorData data = {
-    .temperature = 25.0,
-    .humidity = 50.0,
-    .dhtValid = false,
-    .toluenePPM = 0,
-    .rawADC = 0,
-    .mq135Ro = MQ135_RO_CLEAN_AIR,
-    .calibrated = false
+    // Chamber (placeholder values)
+    .chamberTVOC = 0,
+    .chamberECO2 = 400,
+    .chamberTemp = 25,
+    .chamberHumidity = 50,
+    .chamberValid = false,
+    // Room (placeholder values)
+    .roomTVOC = 0,
+    .roomECO2 = 400,
+    .roomTemp = 25,
+    .roomHumidity = 50,
+    .roomValid = false
 };
 
 // =============================================================================
@@ -90,6 +102,7 @@ SensorData data = {
 // =============================================================================
 ScreenState currentScreen = SCREEN_MAIN;
 volatile bool screenChanged = false;
+volatile bool buttonPressed = false;  // Debug flag
 
 // =============================================================================
 // Button ISR
@@ -99,112 +112,81 @@ void IRAM_ATTR buttonISR() {
     unsigned long now = millis();
     if (now - lastPress > BUTTON_DEBOUNCE_MS) {
         lastPress = now;
+        // Cycle: MAIN -> STATUS -> MAIN_DARK -> MAIN...
         currentScreen = (ScreenState)((currentScreen + 1) % 3);
         screenChanged = true;
+        buttonPressed = true;  // Set debug flag
     }
 }
 
 // =============================================================================
-// MQ135 Reading with Temperature/Humidity Compensation
+// Backlight Control
 // =============================================================================
-float readMQ135(float temp, float humidity, bool tempValid) {
-    int raw = analogRead(MQ135_PIN);
-    data.rawADC = raw;
-    
-    float voltage = raw * (3.3f / 4095.0f);
-    if (voltage < 0.01f) voltage = 0.01f;
-    
-    // Reconstruct original MQ135 voltage (before 10k+20k divider)
-    float mq135Voltage = voltage * 1.5f;
-    if (mq135Voltage > 4.9f) mq135Voltage = 4.9f;
-    
-    // Calculate sensor resistance: Rs = RL * (Vc - Vout) / Vout
-    float rs = MQ135_RL * (5.0f - mq135Voltage) / mq135Voltage;
-    float rsRo = rs / data.mq135Ro;
-    
-    // Apply temperature/humidity correction if available
-    if (tempValid) {
-        float correction = MQ135_CORA * temp * temp 
-                         + MQ135_CORB * temp 
-                         + MQ135_CORC 
-                         - (humidity - 33.0f) * MQ135_CORD;
-        rsRo = rsRo / correction;
-    }
-    
-    // Calculate Toluene PPM: PPM = a * (Rs/Ro)^b
-    float ppm = MQ135_TOLUENE_A * powf(rsRo, MQ135_TOLUENE_B);
-    return constrain(ppm, 0.1f, 999.0f);
+void setBacklight(bool on) {
+    digitalWrite(LCD_BACKLIGHT, on ? HIGH : LOW);
 }
 
 // =============================================================================
 // Read All Sensors
 // =============================================================================
 void readSensors() {
-    float t = dht.readTemperature();
-    float h = dht.readHumidity();
+    // Read Chamber sensors (on hardware I2C - Wire)
+    // Switch to chamber I2C bus
+    Wire.begin(I2C1_SDA, I2C1_SCL);
+    delay(10);
     
-    if (isnan(t) || isnan(h)) {
-        data.dhtValid = false;
-    } else {
-        data.temperature = t;
-        data.humidity = h;
-        data.dhtValid = true;
-    }
+    // Check if chamber ENS160 is connected
+    data.chamberValid = chamberENS.isConnected();
     
-    data.toluenePPM = readMQ135(data.temperature, data.humidity, data.dhtValid);
-    
-    Serial.printf("DHT11: %.1f°C %.1f%% (%s) | MQ135: %.1fppm (raw:%d)\n",
-                  data.temperature, data.humidity, 
-                  data.dhtValid ? "OK" : "ERR",
-                  data.toluenePPM, data.rawADC);
-}
-
-// =============================================================================
-// MQ135 Calibration
-// =============================================================================
-void calibrateMQ135() {
-    Serial.println("Calibrating MQ135 in clean air...");
-    
-    float rsSum = 0;
-    int count = 0;
-    
-    for (int i = 0; i < 50; i++) {
-        int raw = analogRead(MQ135_PIN);
-        float voltage = raw * (3.3f / 4095.0f);
-        if (voltage > 0.01f) {
-            float mq135Voltage = voltage * 1.5f;
-            if (mq135Voltage < 4.9f) {
-                float rs = MQ135_RL * (5.0f - mq135Voltage) / mq135Voltage;
-                rsSum += rs;
-                count++;
-            }
+    if (data.chamberValid) {
+        data.chamberTVOC = chamberENS.getTVOC();
+        data.chamberECO2 = chamberENS.getECO2();
+        
+        // Read AHT20 for temperature and humidity
+        sensors_event_t humidity, temp;
+        if (chamberAHT.getEvent(&humidity, &temp)) {
+            data.chamberTemp = (int)temp.temperature;
+            data.chamberHumidity = (int)humidity.relative_humidity;
+            
+            // Provide temperature compensation to ENS160
+            chamberENS.setTempCompensationCelsius(temp.temperature);
+            chamberENS.setRHCompensationFloat(humidity.relative_humidity);
         }
-        delay(100);
+        
+        Serial.printf("Chamber: TVOC=%dppb eCO2=%dppm T=%dC RH=%d%%\n",
+                      data.chamberTVOC, data.chamberECO2, data.chamberTemp, data.chamberHumidity);
+    } else {
+        //Serial.println("Chamber: DISCONNECTED");
     }
     
-    if (count > 0) {
-        data.mq135Ro = rsSum / count;
-        data.calibrated = true;
+    // Read Room sensors (on software I2C - different pins)
+    // Switch to room I2C bus
+    Wire.begin(I2C2_SDA, I2C2_SCL);
+    delay(10);
+    
+    // Check if room ENS160 is connected
+    data.roomValid = roomENS.isConnected();
+    
+    if (data.roomValid) {
+        data.roomTVOC = roomENS.getTVOC();
+        data.roomECO2 = roomENS.getECO2();
         
-        prefs.begin("voc", false);
-        prefs.putFloat("mq135Ro", data.mq135Ro);
-        prefs.putBool("calibrated", true);
-        prefs.end();
+        // Read AHT20 for temperature and humidity
+        sensors_event_t humidity, temp;
+        if (roomAHT.getEvent(&humidity, &temp)) {
+            data.roomTemp = (int)temp.temperature;
+            data.roomHumidity = (int)humidity.relative_humidity;
+            
+            // Provide temperature compensation to ENS160
+            roomENS.setTempCompensationCelsius(temp.temperature);
+            roomENS.setRHCompensationFloat(humidity.relative_humidity);
+        }
         
-        Serial.printf("Calibration done. Ro = %.2f kΩ\n", data.mq135Ro);
+        Serial.printf("Room: TVOC=%dppb eCO2=%dppm T=%dC RH=%d%%\n",
+                      data.roomTVOC, data.roomECO2, data.roomTemp, data.roomHumidity);
     } else {
-        Serial.println("Calibration failed!");
+        //Serial.println("Room: DISCONNECTED");
     }
-}
-
-void loadCalibration() {
-    prefs.begin("voc", true);
-    if (prefs.isKey("mq135Ro")) {
-        data.mq135Ro = prefs.getFloat("mq135Ro", MQ135_RO_CLEAN_AIR);
-        data.calibrated = prefs.getBool("calibrated", false);
-        Serial.printf("Loaded calibration: Ro = %.2f kΩ\n", data.mq135Ro);
-    }
-    prefs.end();
 }
 
 // =============================================================================
@@ -235,26 +217,32 @@ void connectWiFi() {
 
 #if KLIPPER_PUSH_ENABLED
 unsigned long lastKlipperPush = 0;
+int lastPushResult = 0;
 
 void pushToKlipper() {
     if (!wifiConnected || WiFi.status() != WL_CONNECTED) return;
     
+    WiFiClient client;
     HTTPClient http;
     String url = String("http://") + KLIPPER_HOST + ":" + KLIPPER_PORT + "/server/database/item";
     
     String payload = "{\"namespace\":\"voc_monitor\",\"key\":\"sensor_data\",\"value\":{";
-    payload += "\"temperature\":" + String(data.temperature, 1) + ",";
-    payload += "\"humidity\":" + String(data.humidity, 1) + ",";
-    payload += "\"toluene_ppm\":" + String(data.toluenePPM, 1) + ",";
-    payload += "\"dht_valid\":" + String(data.dhtValid ? "true" : "false") + ",";
-    payload += "\"calibrated\":" + String(data.calibrated ? "true" : "false") + ",";
+    payload += "\"chamber_tvoc\":" + String(data.chamberTVOC) + ",";
+    payload += "\"chamber_eco2\":" + String(data.chamberECO2) + ",";
+    payload += "\"chamber_temp\":" + String(data.chamberTemp) + ",";
+    payload += "\"chamber_rh\":" + String(data.chamberHumidity) + ",";
+    payload += "\"room_tvoc\":" + String(data.roomTVOC) + ",";
+    payload += "\"room_eco2\":" + String(data.roomECO2) + ",";
+    payload += "\"room_temp\":" + String(data.roomTemp) + ",";
+    payload += "\"room_rh\":" + String(data.roomHumidity) + ",";
     payload += "\"timestamp\":" + String(millis());
     payload += "}}";
     
-    http.begin(url);
+    http.begin(client, url);
     http.addHeader("Content-Type", "application/json");
     
     int httpCode = http.POST(payload);
+    lastPushResult = httpCode;
     if (httpCode > 0) {
         Serial.printf("Klipper push: %d\n", httpCode);
     } else {
@@ -270,79 +258,154 @@ void pushToKlipper() {
 // Display Functions
 // =============================================================================
 void drawMainScreen() {
-    char buf[32];
-    u8g2.setFont(u8g2_font_4x6_tf);
+    // Two-column layout with table borders
+    // Using 5x8 font: 25 chars per line, 8 lines
+    // Each column: 64 pixels wide
+    char buf[16];
+    int textWidth;
+    u8g2.setFont(u8g2_font_5x8_tf);
     
+    // Draw outer frame
     u8g2.drawFrame(0, 0, 128, 64);
-    u8g2.drawStr(35, 7, "VOC MONITOR");
-    u8g2.drawHLine(0, 9, 128);
     
-    // DHT11
-    u8g2.drawStr(2, 17, "DHT11:");
-    snprintf(buf, sizeof(buf), "T:%.1fC RH:%.1f%% %s", 
-             data.temperature, data.humidity, data.dhtValid ? "" : "(ERR)");
-    u8g2.drawStr(2, 25, buf);
+    // Draw vertical divider (center)
+    u8g2.drawVLine(64, 0, 44);
     
-    // MQ135
-    u8g2.drawHLine(0, 27, 128);
-    u8g2.drawStr(2, 35, "MQ135 Toluene:");
+    // Draw horizontal lines
+    u8g2.drawHLine(0, 10, 128);   // Below header
+    u8g2.drawHLine(0, 44, 128);   // Above WiFi status
     
-    // Bar
-    int barWidth = map(constrain((int)data.toluenePPM, 0, 100), 0, 100, 0, 124);
-    u8g2.drawFrame(2, 37, 124, 10);
-    if (barWidth > 0) u8g2.drawBox(2, 37, barWidth, 10);
+    // Header row
+    u8g2.drawStr(14, 8, "CHAMBER");
+    u8g2.drawStr(82, 8, "ROOM");
     
-    snprintf(buf, sizeof(buf), "%.1f ppm", data.toluenePPM);
-    u8g2.setFontMode(1);
-    u8g2.setDrawColor(2);
-    u8g2.drawStr(50, 45, buf);
-    u8g2.setDrawColor(1);
-    u8g2.setFontMode(0);
+    // Chamber column (left) - right aligned values
+    if (data.chamberValid) {
+        u8g2.drawStr(2, 20, "TVOC:");
+        snprintf(buf, sizeof(buf), "%dppb", data.chamberTVOC);
+        textWidth = u8g2.getStrWidth(buf);
+        u8g2.drawStr(62 - textWidth, 20, buf);
+        
+        u8g2.drawStr(2, 30, "eCO2:");
+        snprintf(buf, sizeof(buf), "%dppm", data.chamberECO2);
+        textWidth = u8g2.getStrWidth(buf);
+        u8g2.drawStr(62 - textWidth, 30, buf);
+        
+        snprintf(buf, sizeof(buf), "T:%dC RH:%d%%", data.chamberTemp, data.chamberHumidity);
+        u8g2.drawStr(2, 40, buf);
+    } else {
+        u8g2.drawStr(2, 20, "TVOC:");
+        u8g2.drawStr(42, 20, "ERR");
+        u8g2.drawStr(2, 30, "eCO2:");
+        u8g2.drawStr(42, 30, "ERR");
+        u8g2.drawStr(2, 40, "DISCONNECTED");
+    }
     
-    // Status
-    snprintf(buf, sizeof(buf), "Ro:%.1fk %s | Raw:%d", 
-             data.mq135Ro, data.calibrated ? "CAL" : "DEF", data.rawADC);
-    u8g2.drawStr(2, 61, buf);
+    // Room column (right) - right aligned values
+    if (data.roomValid) {
+        u8g2.drawStr(66, 20, "TVOC:");
+        snprintf(buf, sizeof(buf), "%dppb", data.roomTVOC);
+        textWidth = u8g2.getStrWidth(buf);
+        u8g2.drawStr(126 - textWidth, 20, buf);
+        
+        u8g2.drawStr(66, 30, "eCO2:");
+        snprintf(buf, sizeof(buf), "%dppm", data.roomECO2);
+        textWidth = u8g2.getStrWidth(buf);
+        u8g2.drawStr(126 - textWidth, 30, buf);
+        
+        snprintf(buf, sizeof(buf), "T:%dC RH:%d%%", data.roomTemp, data.roomHumidity);
+        u8g2.drawStr(66, 40, buf);
+    } else {
+        u8g2.drawStr(66, 20, "TVOC:");
+        u8g2.drawStr(106, 20, "ERR");
+        u8g2.drawStr(66, 30, "eCO2:");
+        u8g2.drawStr(106, 30, "ERR");
+        u8g2.drawStr(66, 40, "DISCONNECTED");
+    }
+    
+    // Bottom rows: WiFi status (full width)
+    #if WIFI_ENABLED
+    if (wifiConnected) {
+        u8g2.drawStr(2, 52, "WiFi: Connected");
+        snprintf(buf, sizeof(buf), "IP: %s", WiFi.localIP().toString().c_str());
+        u8g2.drawStr(2, 62, buf);
+    } else {
+        u8g2.drawStr(2, 52, "WiFi: Disconnected");
+        u8g2.drawStr(2, 62, "IP: ---.---.---.---");
+    }
+    #else
+    u8g2.drawStr(2, 52, "WiFi: Disabled");
+    u8g2.drawStr(2, 62, "IP: N/A");
+    #endif
 }
 
 void drawStatusScreen() {
-    char buf[32];
-    u8g2.setFont(u8g2_font_4x6_tf);
+    // Status screen with Klipper info
+    u8g2.setFont(u8g2_font_5x8_tf);
     
+    // Draw outer frame
     u8g2.drawFrame(0, 0, 128, 64);
-    u8g2.drawStr(2, 7, "STATUS");
-    u8g2.drawHLine(0, 9, 128);
+    u8g2.drawHLine(0, 10, 128);
     
-    snprintf(buf, sizeof(buf), "DHT11: %s", data.dhtValid ? "OK" : "ERROR");
-    u8g2.drawStr(2, 17, buf);
+    // Header
+    u8g2.drawStr(45, 8, "STATUS");
     
-    snprintf(buf, sizeof(buf), "MQ135 Ro: %.2f kOhm", data.mq135Ro);
-    u8g2.drawStr(2, 25, buf);
+    // WiFi status
+    #if WIFI_ENABLED
+    char buf[26];
+    snprintf(buf, sizeof(buf), "WiFi: %s", wifiConnected ? "Connected" : "Disconnected");
+    u8g2.drawStr(2, 20, buf);
     
-    snprintf(buf, sizeof(buf), "Calibrated: %s", data.calibrated ? "Yes" : "No");
-    u8g2.drawStr(2, 33, buf);
+    if (wifiConnected) {
+        snprintf(buf, sizeof(buf), "IP: %s", WiFi.localIP().toString().c_str());
+    } else {
+        snprintf(buf, sizeof(buf), "IP: ---.---.---.---");
+    }
+    u8g2.drawStr(2, 30, buf);
     
-    snprintf(buf, sizeof(buf), "Heap: %d bytes", ESP.getFreeHeap());
-    u8g2.drawStr(2, 41, buf);
+    // Klipper Push status
+    #if KLIPPER_PUSH_ENABLED
+    u8g2.drawStr(2, 40, "Klipper Push: ON");
+    snprintf(buf, sizeof(buf), "Host: %s:%d", KLIPPER_HOST, KLIPPER_PORT);
+    u8g2.drawStr(2, 50, buf);
     
-    unsigned long s = millis() / 1000;
-    snprintf(buf, sizeof(buf), "Uptime: %lum %lus", s / 60, s % 60);
-    u8g2.drawStr(2, 49, buf);
-    
-    u8g2.drawStr(2, 61, "BTN: cycle screens");
-}
-
-void drawScreenOff() {
-    u8g2.setFont(u8g2_font_4x6_tf);
-    u8g2.drawStr(40, 32, "Press BTN");
+    if (lastPushResult == 0) {
+        u8g2.drawStr(2, 60, "Last Push: --");
+    } else if (lastPushResult == 200) {
+        u8g2.drawStr(2, 60, "Last Push: OK");
+    } else {
+        snprintf(buf, sizeof(buf), "Last Push: ERR %d", lastPushResult);
+        u8g2.drawStr(2, 60, buf);
+    }
+    #else
+    u8g2.drawStr(2, 40, "Klipper Push: OFF");
+    u8g2.drawStr(2, 50, "Host: N/A");
+    u8g2.drawStr(2, 60, "Last Push: N/A");
+    #endif
+    #else
+    u8g2.drawStr(2, 20, "WiFi: Disabled");
+    u8g2.drawStr(2, 30, "IP: N/A");
+    u8g2.drawStr(2, 40, "Klipper Push: OFF");
+    u8g2.drawStr(2, 50, "Host: N/A");
+    u8g2.drawStr(2, 60, "Last Push: N/A");
+    #endif
 }
 
 void updateDisplay() {
     u8g2.clearBuffer();
     switch (currentScreen) {
-        case SCREEN_OFF:    drawScreenOff(); break;
-        case SCREEN_MAIN:   drawMainScreen(); break;
-        case SCREEN_STATUS: drawStatusScreen(); break;
+        case SCREEN_MAIN:
+            drawMainScreen();
+            setBacklight(true);
+            break;
+        case SCREEN_STATUS:
+            drawStatusScreen();
+            setBacklight(true);
+            break;
+        case SCREEN_MAIN_DARK:
+            drawMainScreen();
+            setBacklight(false);
+            break;
     }
     u8g2.sendBuffer();
 }
@@ -353,52 +416,69 @@ void updateDisplay() {
 void setup() {
     Serial.begin(115200);
     delay(500);
-    Serial.println("\n=== VoC Monitor ===\n");
+    Serial.println("\n=== VoC Monitor (ESP8266) ===\n");
     
     // Print pin configuration
-    Serial.println("LCD Pins: E(Clock)=GPIO2, R/W(Data)=GPIO23, RS(CS)=GPIO5");
+    Serial.println("LCD Pins: CLK=D0(16), DATA=D7(13), CS=D8(15), RST=D4(2)");
+    Serial.println("I2C1: SDA=D2(4), SCL=D1(5)");
+    Serial.println("I2C2: SDA=D6(12), SCL=D5(14)");
+    Serial.println("Button: D3(0)");
     
     // Button
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonISR, FALLING);
     
-    // DHT11
-    dht.begin();
+    // Backlight control
+    pinMode(LCD_BACKLIGHT, OUTPUT);
+    digitalWrite(LCD_BACKLIGHT, HIGH);  // Start with backlight on
     
-    // MQ135 ADC
-    analogReadResolution(12);
-    analogSetAttenuation(ADC_11db);
-    
-    // Load or run calibration
-    #ifdef CALIBRATION_MODE
-    delay(2000);
-    calibrateMQ135();
-    #else
-    loadCalibration();
-    #endif
-    
-    // LCD - ST7920 needs time to power up (40ms minimum per datasheet)
+    // LCD initialization
     Serial.println("Initializing LCD...");
-    delay(100);  // Wait for LCD power stabilization
+    delay(100);
     
     u8g2.begin();
-    Serial.println("u8g2.begin() done");
-    
-    delay(100);  // Additional delay after init
+    delay(100);
     u8g2.setPowerSave(0);
-    Serial.println("Power save off");
     
-    // Draw test pattern
-    Serial.println("Drawing test pattern...");
-    u8g2.clearBuffer();
-    u8g2.setFont(u8g2_font_ncenB08_tr);
-    u8g2.drawStr(0, 12, "Hello World!");
-    u8g2.drawBox(0, 20, 50, 10);
-    u8g2.drawFrame(60, 20, 50, 10);
-    u8g2.sendBuffer();
-    Serial.println("Test pattern sent");
+    // Initialize Chamber sensors (I2C1)
+    Serial.println("Initializing Chamber sensors...");
+    Wire.begin(I2C1_SDA, I2C1_SCL);
+    delay(100);
     
-    delay(3000);  // Show test pattern for 3 seconds
+    if (chamberENS.begin(Wire, ENS160_ADDR)) {
+        Serial.println("Chamber ENS160: OK");
+        chamberENS.setOperatingMode(SFE_ENS160_STANDARD);
+        data.chamberValid = true;
+    } else {
+        Serial.println("Chamber ENS160: NOT FOUND");
+        data.chamberValid = false;
+    }
+    
+    if (chamberAHT.begin(&Wire, 0, AHT20_ADDR)) {
+        Serial.println("Chamber AHT20: OK");
+    } else {
+        Serial.println("Chamber AHT20: NOT FOUND");
+    }
+    
+    // Initialize Room sensors (I2C2)
+    Serial.println("Initializing Room sensors...");
+    Wire.begin(I2C2_SDA, I2C2_SCL);
+    delay(100);
+    
+    if (roomENS.begin(Wire, ENS160_ADDR)) {
+        Serial.println("Room ENS160: OK");
+        roomENS.setOperatingMode(SFE_ENS160_STANDARD);
+        data.roomValid = true;
+    } else {
+        Serial.println("Room ENS160: NOT FOUND");
+        data.roomValid = false;
+    }
+    
+    if (roomAHT.begin(&Wire, 0, AHT20_ADDR)) {
+        Serial.println("Room AHT20: OK");
+    } else {
+        Serial.println("Room AHT20: NOT FOUND");
+    }
     
     // WiFi
     #if WIFI_ENABLED
@@ -410,7 +490,7 @@ void setup() {
     readSensors();
     updateDisplay();
     
-    Serial.println("Ready.");
+    Serial.println("Ready. Press button to cycle screens.");
 }
 
 // =============================================================================
@@ -435,6 +515,12 @@ void loop() {
     if (screenChanged) {
         screenChanged = false;
         updateDisplay();
+    }
+    
+    // Debug: print button press
+    if (buttonPressed) {
+        buttonPressed = false;
+        Serial.printf("Button pressed! Screen: %d\n", currentScreen);
     }
     
     delay(50);

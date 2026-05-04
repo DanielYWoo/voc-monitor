@@ -8,7 +8,7 @@ This document provides the detailed technical design for an industrial-grade env
 
 - **Standalone Operation**: Independent system, not tightly coupled to Klipper/Raspberry Pi
 - **Safety**: Real-time VOC monitoring with visual feedback
-- **Reliability**: Dual-zone monitoring with backup sensors
+- **Reliability**: Dual-zone monitoring (Chamber + Room)
 - **Flexibility**: Optional WiFi integration for remote monitoring
 - **24/7 Operation**: Independent power system for continuous monitoring
 - **Usability**: Local LCD display for immediate feedback
@@ -16,54 +16,54 @@ This document provides the detailed technical design for an industrial-grade env
 ### 1.2 System Architecture
 
 ```
-┌───────────────────────────────────────┐       ┌─────────────────────────────────────────────────┐
-│           CHAMBER (Enclosure)         │       │                  ROOM (Ambient)                 │
-│                                       │       │                                                 │
-│  ┌─────────────────────────────────┐  │       │  ┌─────────────────┐ ┌───────────┐ ┌─────────┐  │
-│  │       ENS160+AHT20              │  │       │  │ ENS160+AHT20    │ │  MQ135    │ │  DHT11  │  │
-│  │       (I2C Combo)               │  │       │  │ (I2C Combo)     │ │ (Analog)  │ │ (1-Wire)│  │
-│  │                                 │  │       │  │                 │ │           │ │         │  │
-│  │  • TVOC (ppb)                   │  │       │  │ • TVOC (ppb)    │ │ • Backup  │ │ • Backup│  │
-│  │  • eCO2 (ppm)                   │  │       │  │ • eCO2 (ppm)    │ │   VOC     │ │   Temp  │  │
-│  │  • Temperature (°C)             │  │       │  │ • Temp (°C)     │ │ • Toluene │ │ • Backup│  │
-│  │  • Humidity (%)                 │  │       │  │ • Humidity (%)  │ │   PPM est │ │   RH    │  │
-│  └────────────┬────────────────────┘  │       │  └────────┬────────┘ └─────┬─────┘ └────┬────┘  │
-│               │                       │       │           │               │            │       │
-└───────────────┼───────────────────────┘       └───────────┼───────────────┼────────────┼───────┘
-                │                                           │               │            │
-                │                                           │               │            │
-┌───────────────▼───────────────────────────────────────────▼───────────────▼────────────▼───────┐
-│                                   ESP32 CONTROLLER                                              │
-│                                                                                                 │
-│   ┌─────────────────────────────────────────────────────────────────────────────────────────┐  │
-│   │                              SENSOR INTERFACES                                           │  │
-│   │                                                                                          │  │
-│   │   ┌───────────────────┐  ┌───────────────────┐  ┌───────────────┐  ┌─────────────────┐  │  │
-│   │   │    I2C Bus 1      │  │    I2C Bus 2      │  │    ADC CH1    │  │   GPIO (1-Wire) │  │  │
-│   │   │    (Chamber)      │  │     (Room)        │  │    (MQ135)    │  │     (DHT11)     │  │  │
-│   │   │                   │  │                   │  │               │  │                 │  │  │
-│   │   │   GPIO 21/22      │  │   GPIO 16/17      │  │   GPIO 32     │  │    GPIO 33      │  │  │
-│   │   │        ▲          │  │        ▲          │  │       ▲       │  │        ▲        │  │  │
-│   │   │        │          │  │        │          │  │       │       │  │        │        │  │  │
-│   │   │  ENS160+AHT20     │  │  ENS160+AHT20     │  │  Analog In    │  │   Digital In    │  │  │
-│   │   └────────┼──────────┘  └────────┼──────────┘  └───────┼───────┘  └────────┼────────┘  │  │
-│   │            │                      │                     │                   │           │  │
-│   │            └──────────────────────┴─────────────────────┴───────────────────┘           │  │
-│   │                                            │                                             │  │
-│   │                                   ┌────────▼────────┐                                    │  │
-│   │                                   │  Data Processor │                                    │  │
-│   │                                   └────────┬────────┘                                    │  │
-│   └────────────────────────────────────────────┼─────────────────────────────────────────────┘  │
-│                                                │                                                │
-│   ┌────────────────────────────────────────────┼─────────────────────────────────────────────┐  │
-│   │                               OUTPUT LAYER                                                │  │
-│   │                                            │                                              │  │
-│   │          ┌──────────────────┐      ┌───────┴───────┐                                     │  │
-│   │          │  ST7920 128x64   │      │  WiFi Client  │                                     │  │
-│   │          │  LCD (Serial)    │      │  (Optional)   │                                     │  │
-│   │          └──────────────────┘      └───────────────┘                                     │  │
-│   └──────────────────────────────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────┐       ┌─────────────────────────────────┐
+│           CHAMBER (Enclosure)         │       │          ROOM (Ambient)         │
+│                                       │       │                                 │
+│  ┌─────────────────────────────────┐  │       │  ┌─────────────────────────────┐│
+│  │       ENS160+AHT20              │  │       │  │       ENS160+AHT20          ││
+│  │       (I2C Combo)               │  │       │  │       (I2C Combo)           ││
+│  │                                 │  │       │  │                             ││
+│  │  • TVOC (ppb)                   │  │       │  │  • TVOC (ppb)               ││
+│  │  • eCO2 (ppm)                   │  │       │  │  • eCO2 (ppm)               ││
+│  │  • Temperature (°C)             │  │       │  │  • Temperature (°C)         ││
+│  │  • Humidity (%)                 │  │       │  │  • Humidity (%)             ││
+│  └────────────┬────────────────────┘  │       │  └────────────┬────────────────┘│
+│               │                       │       │               │                 │
+└───────────────┼───────────────────────┘       └───────────────┼─────────────────┘
+                │                                               │
+                │                                               │
+┌───────────────▼───────────────────────────────────────────────▼─────────────────┐
+│                              ESP8266 CONTROLLER                                  │
+│                                                                                  │
+│   ┌──────────────────────────────────────────────────────────────────────────┐  │
+│   │                           SENSOR INTERFACES                               │  │
+│   │                                                                           │  │
+│   │   ┌───────────────────┐  ┌───────────────────┐                           │  │
+│   │   │    I2C Bus 1      │  │    I2C Bus 2      │                           │  │
+│   │   │    (Chamber)      │  │     (Room)        │                           │  │
+│   │   │   Hardware I2C    │  │   Software I2C    │                           │  │
+│   │   │   GPIO 4/5        │  │   GPIO 12/14      │                           │  │
+│   │   │        ▲          │  │        ▲          │                           │  │
+│   │   │        │          │  │        │          │                           │  │
+│   │   │  ENS160+AHT20     │  │  ENS160+AHT20     │                           │  │
+│   │   └────────┼──────────┘  └────────┼──────────┘                           │  │
+│   │            │                      │                                       │  │
+│   │            └──────────────────────┘                                       │  │
+│   │                        │                                                  │  │
+│   │               ┌────────▼────────┐                                         │  │
+│   │               │  Data Processor │                                         │  │
+│   │               └────────┬────────┘                                         │  │
+│   └────────────────────────┼──────────────────────────────────────────────────┘  │
+│                            │                                                     │
+│   ┌────────────────────────┼──────────────────────────────────────────────────┐  │
+│   │                    OUTPUT LAYER                                            │  │
+│   │                        │                                                   │  │
+│   │      ┌──────────────────┐      ┌───────────────┐                          │  │
+│   │      │  ST7920 128x64   │      │  WiFi Client  │                          │  │
+│   │      │  LCD (Serial)    │      │  (Optional)   │                          │  │
+│   │      └──────────────────┘      └───────────────┘                          │  │
+│   └───────────────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -72,102 +72,94 @@ This document provides the detailed technical design for an industrial-grade env
 
 ### 2.1 Component Selection
 
-#### 2.1.1 ESP32 Selection Criteria
+#### 2.1.1 ESP8266 Selection Criteria
 
-| Requirement | ESP32 Capability | Notes |
-|-------------|------------------|-------|
-| Dual I2C Buses | ✓ Hardware I2C on any GPIO | Required for two AHT20 sensors (fixed 0x38 address) |
-| ADC Channel | ✓ 12-bit ADC | For MQ135 analog sensor |
+| Requirement | ESP8266 Capability | Notes |
+|-------------|-------------------|-------|
+| I2C Buses | ✓ 1 Hardware + Software I2C | Required for two AHT20 sensors (fixed 0x38 address) |
 | WiFi | ✓ 802.11 b/g/n | Optional remote monitoring |
-| Processing Power | ✓ Dual-core 240MHz | LCD GUI + sensor processing |
-| RAM | ✓ 520KB SRAM | Sufficient for 128x64 LCD |
-| Flash | ✓ 4MB+ | Firmware + configuration storage |
+| Processing Power | ✓ 80/160MHz | Sufficient for LCD + sensor processing |
+| RAM | ✓ 80KB SRAM | Sufficient for 128x64 LCD |
+| Flash | ✓ 4MB | Firmware + configuration storage |
+| GPIO | ✓ 11 usable GPIO | Enough for LCD + 2x I2C + button |
 
-**Recommended Board**: ESP32-WROOM-32 DevKit (38-pin)
+**Recommended Board**: NodeMCU v3 (ESP-12E) or Wemos D1 Mini
 
 ### 2.2 Sensor Configuration
 
 | Sensor | Location | Interface | I2C Address | Measurements |
 |--------|----------|-----------|-------------|--------------|
-| ENS160+AHT20 #1 | Chamber | I2C Bus 1 (GPIO 21/22) | 0x52, 0x38 | TVOC, eCO2, Temp, RH |
-| ENS160+AHT20 #2 | Room | I2C Bus 2 (GPIO 16/17) | 0x52, 0x38 | TVOC, eCO2, Temp, RH |
-| MQ135 | Room | ADC (GPIO 32) | N/A | Backup VOC (Toluene PPM) |
-| DHT11 | Room | 1-Wire (GPIO 33) | N/A | Backup Temp, RH |
+| ENS160+AHT20 #1 | Chamber | I2C Bus 1 (Hardware) | 0x52, 0x38 | TVOC, eCO2, Temp, RH |
+| ENS160+AHT20 #2 | Room | I2C Bus 2 (Software) | 0x52, 0x38 | TVOC, eCO2, Temp, RH |
 
-**Note**: The MQ135 and DHT11 in the room serve as backup/validation sensors for the ENS160+AHT20. The DHT11 provides temperature and humidity readings used for MQ135 compensation and as a fallback if the primary AHT20 fails.
+**Note**: Since both AHT20 sensors have the same fixed I2C address (0x38), we use two separate I2C buses - one hardware and one software-emulated.
 
 ### 2.3 Memory Considerations
 
-**ESP32 Memory Budget:**
-- Total SRAM: 520 KB
-- WiFi stack: ~80 KB
+**ESP8266 Memory Budget:**
+- Total SRAM: 80 KB
+- WiFi stack: ~40 KB
 - 128x64 LCD framebuffer: ~1 KB
-- Application code + libraries: ~50 KB
-- **Free heap: ~200+ KB** ✓ Plenty of headroom
+- Application code + libraries: ~20 KB
+- **Free heap: ~20+ KB** ✓ Sufficient for operation
 
-Using 128x64 LCD instead of color TFT saves significant memory and simplifies the design.
+Using 128x64 LCD instead of color TFT saves significant memory.
 
-### 2.4 ESP32 Pin Assignment
-
-**Note:** This diagram shows a common 38-pin ESP32-WROOM-32E DevKit layout (USB port at bottom). Pin positions may vary between manufacturers - always verify your specific board's pinout. The GPIO numbers in the code are correct regardless of physical pin position.
-
-```
-    ESP32-WROOM-32E DevKit (38-pin)
-    
-    ┌─────────────────────────────────────────────────────┐
-    │                                                     │
-    │  3V3    ●  1                          38 ●  GND     │
-    │  EN     ●  2                          37 ●  GPIO23  │◄── LCD R/W (MOSI)
-    │  GPIO36 ●  3  (VP)                    36 ●  GPIO22  │◄── LCD RST
-    │  GPIO39 ●  4  (VN)                    35 ●  GPIO1   │    (TX0)
-    │  GPIO34 ●  5                          34 ●  GPIO3   │    (RX0)
-    │  GPIO35 ●  6                          33 ●  GPIO21  │◄── I2C1_SDA
-    │  GPIO32 ●  7  ◄── MQ135               32 ●  GND     │
-    │  GPIO33 ●  8  ◄── DHT11               31 ●  GPIO19  │
-    │  GPIO25 ●  9                          30 ●  GPIO18  │◄── LCD E (CLK)
-    │  GPIO26 ● 10  ◄── BUTTON              29 ●  GPIO5   │◄── LCD RS (CS)
-    │  GPIO27 ● 11                          28 ●  GPIO17  │◄── I2C2_SCL
-    │  GPIO14 ● 12                          27 ●  GPIO16  │◄── I2C2_SDA
-    │  GPIO12 ● 13                          26 ●  GPIO4   │
-    │  GND    ● 14                          25 ●  GPIO0   │
-    │  GPIO13 ● 15                          24 ●  GPIO2   │
-    │  SD2    ● 16                          23 ●  GPIO15  │
-    │  SD3    ● 17                          22 ●  SD1     │
-    │  CMD    ● 18                          21 ●  SD0     │
-    │  5V     ● 19                          20 ●  CLK     │
-    │                                                     │
-    ├─────────────────────────────────────────────────────┤
-    │                     ┌───┐                           │
-    │                     │USB│                           │
-    │                     └───┘                           │
-    └─────────────────────────────────────────────────────┘
-```
+### 2.4 ESP8266 Pin Assignment
 
 #### Pin Assignment Table
 
-| Function | GPIO | Direction | Notes |
-|----------|------|-----------|-------|
-| **ST7920 LCD (Hardware SPI Mode)** |
-| LCD_E (Clock) | GPIO 18 | Output | ESP32 VSPI CLK |
-| LCD_R/W (Data) | GPIO 23 | Output | ESP32 VSPI MOSI |
-| LCD_RS (CS) | GPIO 5 | Output | ESP32 VSPI CS |
-| LCD_RST | GPIO 22 | Output | Reset (active LOW) |
-| **I2C Bus 1 (Chamber)** |
-| I2C1_SDA | GPIO 21 | Bidirectional | ENS160+AHT20 |
-| I2C1_SCL | GPIO 4 | Output | 100kHz (moved from GPIO 22) |
-| **I2C Bus 2 (Room)** |
-| I2C2_SDA | GPIO 16 | Bidirectional | ENS160+AHT20 |
-| I2C2_SCL | GPIO 17 | Output | 100kHz |
-| **Analog Input** |
-| MQ135 | GPIO 32 | Input (ADC) | Room backup VOC sensor |
-| **Digital Input** |
-| DHT11 | GPIO 33 | Bidirectional | Room backup Temp/RH sensor |
+| Function | GPIO | NodeMCU Pin | Direction | Notes |
+|----------|------|-------------|-----------|-------|
+| **ST7920 LCD (Software SPI Mode)** |
+| LCD_CLK (E) | GPIO 16 | D0 | Output | Software SPI clock |
+| LCD_DATA (R/W) | GPIO 13 | D7 | Output | Software SPI data |
+| LCD_CS (RS) | GPIO 15 | D8 | Output | Chip select |
+| LCD_RST | GPIO 2 | D4 | Output | Reset (active LOW) |
+| **I2C Bus 1 - Hardware (Chamber)** |
+| I2C1_SDA | GPIO 4 | D2 | Bidirectional | ENS160+AHT20 |
+| I2C1_SCL | GPIO 5 | D1 | Output | 100kHz |
+| **I2C Bus 2 - Software (Room)** |
+| I2C2_SDA | GPIO 12 | D6 | Bidirectional | ENS160+AHT20 |
+| I2C2_SCL | GPIO 14 | D5 | Output | 100kHz |
 | **User Input** |
-| BUTTON | GPIO 26 | Input | Internal pull-up |
+| BUTTON | GPIO 0 | D3 | Input | Internal pull-up, FLASH button |
+| **LCD Backlight** |
+| LCD_BACKLIGHT | GPIO 3 | RX | Output | Backlight control via 47Ω resistor |
 
-### 2.5 ST7920 LCD Pinout (12864 Display)
+**Note:** GPIO 0 is the FLASH button on most NodeMCU boards. It has an internal pull-up and can be used as a regular button input when not in programming mode.
 
-The ST7920 is a common 128x64 LCD controller used in 3D printer displays. It supports both parallel (8-bit) and serial (SPI-like) modes. We use **serial mode** to minimize GPIO usage.
+**Note:** GPIO 3 (RX) is used for backlight control. Serial TX still works for debug output, but serial input is disabled.
+
+### 2.5 NodeMCU Pinout Diagram
+
+```
+    NodeMCU v3 (ESP-12E)
+    
+    ┌─────────────────────────────────────────┐
+    │  A0     ●  1                  16 ●  D0  │◄── LCD_CLK (GPIO 16)
+    │  RSV    ●  2                  15 ●  D1  │◄── I2C1_SCL (GPIO 5)
+    │  RSV    ●  3                  14 ●  D2  │◄── I2C1_SDA (GPIO 4)
+    │  SD3    ●  4                  13 ●  D3  │◄── BUTTON (GPIO 0)
+    │  SD2    ●  5                  12 ●  D4  │◄── LCD_RST (GPIO 2)
+    │  SD1    ●  6                  11 ●  3V3 │
+    │  CMD    ●  7                  10 ●  GND │
+    │  SD0    ●  8                   9 ●  D5  │◄── I2C2_SCL (GPIO 14)
+    │  CLK    ●  9                   8 ●  D6  │◄── I2C2_SDA (GPIO 12)
+    │  GND    ● 10                   7 ●  D7  │◄── LCD_DATA (GPIO 13)
+    │  3V3    ● 11                   6 ●  D8  │◄── LCD_CS (GPIO 15)
+    │  EN     ● 12                   5 ●  RX  │◄── LCD_BACKLIGHT (GPIO 3)
+    │  RST    ● 13                   4 ●  TX  │
+    │  GND    ● 14                   3 ●  GND │
+    │  VIN    ● 15                   2 ●  3V3 │
+    ├─────────────────────────────────────────┤
+    │                  │USB│                  │
+    └─────────────────────────────────────────┘
+```
+
+### 2.6 ST7920 LCD Pinout (12864 Display)
+
+The ST7920 is a common 128x64 LCD controller. We use **serial mode** to minimize GPIO usage.
 
 ```
                     ST7920 128x64 LCD Module (12864)
@@ -176,116 +168,64 @@ The ST7920 is a common 128x64 LCD controller used in 3D printer displays. It sup
                    │  ───   ────    ────────         │
                    │   1    GND     Ground           │
                    │   2    VCC     Power (5V)       │
-                   │   3    V0      Contrast         │◄── GND (max contrast)
-                   │   4    RS      Register Select  │◄── GPIO 5 (CS)
-                   │   5    R/W     Read/Write       │◄── GPIO 23 (MOSI)
-                   │   6    E       Enable           │◄── GPIO 18 (CLK)
+                   │   3    V0      Contrast         │◄── Leave floating or use 10k pot
+                   │   4    RS      Register Select  │◄── GPIO 15 (D8) - CS
+                   │   5    R/W     Read/Write       │◄── GPIO 13 (D7) - Data
+                   │   6    E       Enable           │◄── GPIO 16 (D0) - Clock
                    │  7-14  DB0-7   Data Bus (NC)    │    (Not used in serial mode)
                    │  15    PSB     Bus Select       │◄── GND (Serial mode)
                    │  16    NC      Not Connected    │
-                   │  17    RST     Reset            │◄── 5V (tied high)
+                   │  17    RST     Reset            │◄── GPIO 2 (D4) - Reset
                    │  18    VOUT    LCD Drive (NC)   │
-                   │  19    BLA     Backlight +      │◄── 3.3V (direct)
+                   │  19    BLA     Backlight +      │◄── 47Ω resistor -> RX (GPIO 3)
                    │  20    BLK     Backlight -      │◄── GND
                    └─────────────────────────────────┘
 
-    Hardware SPI Mode Pin Functions (ESP32 VSPI):
+    Software SPI Mode Pin Functions:
     ┌─────────┬────────────────────────────────────────────────────────┐
-    │ LCD Pin │ Hardware SPI Function                                  │
+    │ LCD Pin │ Function                                               │
     ├─────────┼────────────────────────────────────────────────────────┤
-    │ RS      │ Chip Select (CS) - GPIO 5                              │
-    │ R/W     │ Data Line (MOSI) - GPIO 23                             │
-    │ E       │ Clock (CLK) - GPIO 18 (VSPI CLK)                       │
+    │ RS      │ Chip Select (CS) - GPIO 15 (D8)                        │
+    │ R/W     │ Data Line - GPIO 13 (D7)                               │
+    │ E       │ Clock - GPIO 16 (D0)                                   │
     │ PSB     │ Mode Select - GND = Serial, VCC = Parallel             │
-    │ RST     │ Reset - 5V (tied high, no GPIO needed)                 │
-    │ V0      │ Contrast - GND for maximum contrast                    │
+    │ RST     │ Reset - GPIO 2 (D4)                                    │
+    │ V0      │ Contrast - Leave floating or use 10k pot (GND=min)     │
     └─────────┴────────────────────────────────────────────────────────┘
-    
-    Reference: https://www.instructables.com/ST7920-128X64-LCD-Display-to-ESP32/
 ```
 
-### 2.6 Circuit Schematics
+### 2.7 Circuit Schematics
 
-#### 2.6.1 MQ135 Voltage Divider
-
-```
-                    MQ135 Module
-                   ┌─────────────┐
-                   │             │
-            VCC ───┤ VCC     AO  ├───┐
-            (5V)   │             │   │
-                   │         DO  │   │  (Analog Output 0-5V)
-                   │             │   │
-            GND ───┤ GND         │   │
-                   └─────────────┘   │
-                                     │
-                              ┌──────┴──────┐
-                              │    R1       │
-                              │   10kΩ      │
-                              └──────┬──────┘
-                                     │
-                                     ├─────────────► GPIO32 (ESP32 ADC)
-                                     │
-                              ┌──────┴──────┐
-                              │    R2       │
-                              │   20kΩ      │
-                              └──────┬──────┘
-                                     │
-                                    GND
-
-    Vout = 5V × 20k / (10k + 20k) = 3.33V max
-```
-
-#### 2.6.2 DHT11 Wiring
+#### 2.7.1 ST7920 LCD Wiring
 
 ```
-    DHT11 Module                    ESP32
+    ST7920 LCD Module               NodeMCU
     ┌─────────────┐                ┌─────┐
     │             │                │     │
-    │  VCC    ────┼────────────────┤ 3V3 │
-    │             │                │     │
-    │  DATA   ────┼────────────────┤ 33  │  (GPIO 33)
-    │             │                │     │
-    │  NC         │                │     │  (Not Connected)
-    │             │                │     │
-    │  GND    ────┼────────────────┤ GND │
-    │             │                │     │
-    └─────────────┘                └─────┘
-
-    Note: Most DHT11 modules have a built-in 10kΩ pull-up resistor.
-          If using bare DHT11 sensor, add 10kΩ pull-up between DATA and VCC.
-```
-
-#### 2.6.3 ST7920 LCD Wiring (Hardware SPI)
-
-```
-    ST7920 LCD Module               ESP32
-    ┌─────────────┐                ┌─────┐
-    │             │                │     │
-    │  VCC (2) ───┼────────────────┤ 5V  │
+    │  VCC (2) ───┼────────────────┤ VIN │  (5V from USB)
     │  GND (1) ───┼────────────────┤ GND │
-    │  V0  (3) ───┼────────────────┤ GND │  (Max contrast)
-    │  RS  (4) ───┼────────────────┤ 5   │  (CS)
-    │  R/W (5) ───┼────────────────┤ 23  │  (MOSI)
-    │  E   (6) ───┼────────────────┤ 18  │  (CLK)
+    │  V0  (3) ───┼────────────────┤ NC  │  (Leave floating)
+    │  RS  (4) ───┼────────────────┤ D8  │  (GPIO 15 - CS)
+    │  R/W (5) ───┼────────────────┤ D7  │  (GPIO 13 - Data)
+    │  E   (6) ───┼────────────────┤ D0  │  (GPIO 16 - Clock)
     │  PSB(15) ───┼────────────────┤ GND │  (Serial mode)
-    │  RST(17) ───┼────────────────┤ 5V  │  (Tied high)
-    │  BLA(19) ───┼────────────────┤ 3V3 │  (Backlight)
+    │  RST(17) ───┼────────────────┤ D4  │  (GPIO 2 - Reset)
+    │  BLA(19) ───┼──[47Ω]─────────┤ RX  │  (GPIO 3 - Backlight ctrl)
     │  BLK(20) ───┼────────────────┤ GND │
     │             │                │     │
     └─────────────┘                └─────┘
 ```
 
-#### 2.6.4 I2C Bus Connections
+#### 2.7.2 I2C Bus Connections
 
 ```
-    I2C BUS 1 (Chamber)                    I2C BUS 2 (Room)
-    ═══════════════════                    ════════════════
+    I2C BUS 1 - Hardware (Chamber)         I2C BUS 2 - Software (Room)
+    ══════════════════════════════         ═══════════════════════════
     
-    ESP32          ENS160+AHT20            ESP32          ENS160+AHT20
+    NodeMCU        ENS160+AHT20            NodeMCU        ENS160+AHT20
     ┌─────┐       ┌─────────────┐          ┌─────┐       ┌─────────────┐
-    │ 21  ├───────┤ SDA         │          │ 16  ├───────┤ SDA         │
-    │  4  ├───────┤ SCL         │          │ 17  ├───────┤ SCL         │
+    │ D2  ├───────┤ SDA         │          │ D6  ├───────┤ SDA         │
+    │ D1  ├───────┤ SCL         │          │ D5  ├───────┤ SCL         │
     │ 3V3 ├───────┤ VCC         │          │ 3V3 ├───────┤ VCC         │
     │ GND ├───────┤ GND         │          │ GND ├───────┤ GND         │
     └─────┘       └─────────────┘          └─────┘       └─────────────┘
@@ -293,332 +233,145 @@ The ST7920 is a common 128x64 LCD controller used in 3D printer displays. It sup
     WHY TWO I2C BUSES?
     The AHT20 has a FIXED I2C address of 0x38 that cannot be changed.
     To use two AHT20 sensors, we need two separate I2C buses.
+    ESP8266 has 1 hardware I2C, so we use software I2C for the second bus.
+```
+
+#### 2.7.3 Button Wiring
+
+```
+    Button Wiring (using GPIO 0 / D3)
+    ═════════════════════════════════
     
-    NOTE: I2C1_SCL moved from GPIO 22 to GPIO 4 because GPIO 22 is now
-    used for LCD RST (Hardware SPI mode).
+    The button is wired between GPIO 0 and GND. GPIO 0 has an internal
+    pull-up resistor, so no external resistor is needed.
+    
+    NodeMCU                    Button
+    ┌─────┐                   ┌─────┐
+    │     │                   │     │
+    │ D3  ├───────────────────┤  ○──┼───┐
+    │     │   (GPIO 0)        │     │   │
+    │ GND ├───────────────────┤  ○──┼───┘
+    │     │                   │     │
+    └─────┘                   └─────┘
+    
+    Button States:
+    - Released: GPIO 0 reads HIGH (pulled up internally)
+    - Pressed: GPIO 0 reads LOW (connected to GND)
+    
+    Note: GPIO 0 is also the FLASH button on NodeMCU. During normal
+    operation, it works as a regular button. Only during boot does
+    it affect programming mode (hold LOW during reset = flash mode).
 ```
 
 ---
 
 ## 3. Display Design
 
-### 3.1 Display Selection: 128x64 OLED/LCD
+### 3.1 Display Hardware
 
-Using a 128x64 monochrome display (SSD1306 OLED or ST7565 LCD) with the **U8g2 library**.
+- **Display**: ST7920 128x64 LCD (monochrome)
+- **Library**: U8g2
+- **Font**: `u8g2_font_5x8_tf` (5×8 pixels, 25 chars per line, 8 lines)
+- **Interface**: Software SPI
 
-**U8g2 Font Constraints:**
-- Fonts are bitmap-based, not scalable
-- Common fonts and their character heights:
-  - `u8g2_font_6x10_tf` - 6×10 pixels (fits ~21 chars × 6 lines)
-  - `u8g2_font_5x8_tf` - 5×8 pixels (fits ~25 chars × 8 lines)
-  - `u8g2_font_4x6_tf` - 4×6 pixels (fits ~32 chars × 10 lines)
+### 3.2 Screen States (3 Cycles)
 
-### 3.2 Screen 1: Main Data Screen
+The display cycles through 3 states when the button is pressed:
 
-**Design Principle: Text ON Bars**
-- Text is rendered directly on the progress bars
-- When bar is filled (solid), text is inverted (white on black)
-- When bar is empty, text is normal (black on white)
-- This saves vertical space by combining value + bar into one line
+1. **SCREEN_MAIN** - Main sensor data (Chamber & Room in two columns), backlight ON
+2. **SCREEN_STATUS** - WiFi and Klipper push status, backlight ON
+3. **SCREEN_MAIN_DARK** - Main sensor data, backlight OFF (power saving)
 
-**Layout Analysis for 128×64:**
+#### Page 1: Main Screen (SCREEN_MAIN)
 
-Using `u8g2_font_5x8_tf` (5×8 pixels):
-- 128 ÷ 5 = 25 characters per line
-- 64 ÷ 8 = 8 lines available
+Two-column layout with table borders showing Chamber and Room sensor data side by side.
 
 ```
-┌────────────────────────────┐
-│ CHAMBER    │ ROOM          │  Line 1: Header
-├────────────┼───────────────┤
-│▓▓▓▓▓▓░░░░░│▓░░░░░░░░░░░░░│  Line 2: TVOC bars with text
-│ 1245 ppb  │   52 ppb      │         (inverted text on filled part)
-├────────────┼───────────────┤
-│▓▓▓▓▓▓▓░░░░│▓▓░░░░░░░░░░░░│  Line 3: eCO2 bars with text
-│ 2892 ppm  │  421 ppm      │         (inverted text on filled part)
-├────────────┼───────────────┤
-│ 58°C  23% │ 24°C  45%     │  Line 4: Temp & Humidity
-│           │               │
-│           │ MQ135: 0.72 ↑ │  Line 5: MQ135 (Room only)
-│           │ DHT11: 24°C   │  Line 6: DHT11 backup (Room only)
-└────────────┴───────────────┘
-        128 × 64 pixels
+┌───────────────┬───────────────┐
+│   CHAMBER     │     ROOM      │  Header row
+├───────────────┼───────────────┤
+│TVOC:    150ppb│TVOC:     50ppb│  TVOC values (right-aligned)
+│eCO2:    800ppm│eCO2:    450ppm│  eCO2 values (right-aligned)
+│T:35C RH:30%   │T:25C RH:50%   │  Temp & humidity
+├───────────────┴───────────────┤
+│WiFi: Connected                │  WiFi status
+│IP: 192.168.1.100              │  IP address
+└───────────────────────────────┘
+        128 × 64 pixels (5x8 font)
 ```
 
-**Bar with Embedded Text Rendering:**
-```
-Example: TVOC = 1245 ppb (62% of max 2000 ppb)
+#### Page 2: Status Screen (SCREEN_STATUS)
 
-┌─────────────────────────────────────────────────────────────┐
-│▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░│
-│  1 2 4 5   p p b              │                             │
-│  (inverted/white text)        │  (normal/black text area)   │
-└─────────────────────────────────────────────────────────────┘
-
-U8g2 Implementation:
-1. Draw filled rectangle for bar portion
-2. Set draw mode to XOR or use setDrawColor(0) for inverted text
-3. Draw text - it will appear inverted on filled area
-```
-
-**Final Layout with Labels (6 lines used):**
-
-Using `u8g2_font_5x8_tf` (5×8 pixels) = 25 chars per line
+Shows WiFi and Klipper push status details.
 
 ```
-┌─────────────┬──────────────┐
-│  CHAMBER    │    ROOM      │  Line 1: Header (8px)
-│TVOC▓1245ppb░│TVOC▓52ppb░░░░│  Line 2: TVOC label+bar+value (8px)
-│eCO2▓2892ppm░│eCO2▓421ppm░░░│  Line 3: eCO2 label+bar+value (8px)
-│ 58°C   23%  │ 24°C   45%   │  Line 4: Temp & RH (8px)
-│             │MQ135:0.72 ↑  │  Line 5: MQ135 Room only (8px)
-│             │DHT: 24°C 50% │  Line 6: DHT11 Room only (8px)
-└─────────────┴──────────────┘
-        128 × 64 pixels
+┌───────────────────────────────┐
+│           STATUS              │  Header
+├───────────────────────────────┤
+│WiFi: Connected                │  WiFi status
+│IP: 192.168.1.100              │  IP address
+│Klipper Push: ON               │  Push enabled flag
+│Host: 192.168.1.50:7125        │  Klipper endpoint
+│Last Push: OK                  │  Last push result
+└───────────────────────────────┘
+        128 × 64 pixels (5x8 font)
 ```
 
-**Character Count Verification (25 chars max per line):**
-
-Each column is ~12-13 chars (128px ÷ 2 ÷ 5px = 12.8 chars per column)
-
-| Line | Chamber Column | Room Column | Total |
-|------|----------------|-------------|-------|
-| 1 | "  CHAMBER" (9) | "   ROOM" (7) | 16 ✓ |
-| 2 | "TVOC▓1245ppb░" (13) | "TVOC▓52ppb░░░░" (14) | 27 ⚠️ |
-| 3 | "eCO2▓2892ppm░" (13) | "eCO2▓421ppm░░░" (14) | 27 ⚠️ |
-| 4 | " 58°C   23%" (11) | " 24°C   45%" (11) | 22 ✓ |
-| 5 | "" (0) | "MQ135:0.72 ↑" (12) | 12 ✓ |
-| 6 | "" (0) | "DHT: 24°C 50%" (13) | 13 ✓ |
-
-**Issue:** Lines 2-3 are slightly over 25 chars. Solutions:
-1. Use smaller font `u8g2_font_4x6_tf` (32 chars per line) ✓
-2. Abbreviate: "TVOC" → "TV", "eCO2" → "CO2"
-3. Remove spaces
-
-**Revised with 4x6 font (32 chars per line):**
-
-Using Option A layout with outer borders and abbreviated labels:
+### 3.3 Screen State Machine
 
 ```
-┌─────────────────────────────────┐  ← Top border (1px)
-│   CHAMBER     │     ROOM        │  Line 1: Header
-│TVOC ▓▓1245ppb░│TVOC ▓52ppb░░░░░░│  Line 2: TVOC bar
-│eCO2 ▓▓2892ppm░│eCO2 ▓421ppm░░░░░│  Line 3: eCO2 bar
-│T:58°C  RH:23% │T:24°C  RH:45%   │  Line 4: AHT20 T & RH
-├─────────────────────────────────┤  Line 5: Full-width separator
-│ Room Backup                     │  Line 6: Section header (full-width)
-│ Toluene:2.5ppm T:24°C RH:50%    │  Line 7: MQ135→Toluene + DHT11 (full-width)
-└─────────────────────────────────┘  ← Bottom border (1px)
-        128 × 64 pixels (using 4x6 font)
-        7 lines × 8px = 56px content + 8px for borders = 64px ✓
+┌─────────────────┐
+│   MAIN SCREEN   │◄─────────────────────────────────┐
+│  (Backlight ON) │                                   │
+│                 │                                   │
+│ • Chamber TVOC  │                                   │
+│ • Chamber eCO2  │                                   │
+│ • Chamber T/RH  │                                   │
+│ • Room TVOC     │                                   │
+│ • Room eCO2     │                                   │
+│ • Room T/RH     │                                   │
+│ • WiFi status   │                                   │
+└────────┬────────┘                                   │
+         │ Button Press                               │
+         ▼                                            │
+┌─────────────────┐                                   │
+│  STATUS SCREEN  │                                   │
+│  (Backlight ON) │                                   │
+│                 │                                   │
+│ • WiFi status   │                                   │
+│ • IP address    │                                   │
+│ • Klipper Push  │                                   │
+│ • Klipper Host  │                                   │
+│ • Last push     │                                   │
+└────────┬────────┘                                   │
+         │ Button Press                               │
+         ▼                                            │
+┌─────────────────┐                                   │
+│   MAIN SCREEN   │                                   │
+│ (Backlight OFF) │                                   │
+│                 │                                   │
+│  Same as above  │                                   │
+│  but backlight  │                                   │
+│  is turned off  │                                   │
+│  for power      │                                   │
+│  saving         │                                   │
+└────────┬────────┘                                   │
+         │ Button Press                               │
+         └────────────────────────────────────────────┘
 ```
 
-**Label Abbreviations:**
-- `T:` instead of `Temp:` (consistent across all screens)
-- `RH:` for relative humidity
-- `Toluene:` for MQ135 estimated PPM (full name, sufficient space)
-
-**Character Count Verification (32 chars max per line with 4x6 font):**
-- Line 7: `Toluene:999ppm T:99°C RH:99%` = 29 chars ✓ (fits with room to spare)
-
-**Verdict: FITS with 4x6 font and outer borders** ✓
-
-### 3.2.1 MQ135 Toluene PPM Estimation
-
-The MQ135 analog sensor outputs a resistance ratio (Rs/Ro) which can be converted to an estimated PPM value using the **Toluene calibration curve** from the datasheet. Toluene is used as a proxy for VOCs emitted during 3D printing (styrene from ABS, etc.).
-
-**Conversion Formula:**
-```
-PPM = a × (Rs/Ro)^b
-
-Where for Toluene:
-  a = 44.947
-  b = -3.445
-```
-
-**Temperature/Humidity Compensation:**
-
-The MQ135 sensitivity varies with temperature and humidity. Apply correction factor:
-
-```
-Correction Factor = CORA × T² + CORB × T + CORC - (RH - 33) × CORD
-
-Where:
-  CORA = 0.00035
-  CORB = 0.02718
-  CORC = 1.39538
-  CORD = 0.0018
-  T = Temperature in °C (from DHT11)
-  RH = Relative Humidity in % (from DHT11)
-
-Corrected Rs/Ro = (Rs/Ro) / Correction Factor
-```
-
-**Implementation:**
-```cpp
-float calculateToluenePPM(float rsRo, float tempC, float humidity) {
-    // Temperature/humidity correction
-    float correction = 0.00035 * tempC * tempC 
-                     + 0.02718 * tempC 
-                     + 1.39538 
-                     - (humidity - 33.0) * 0.0018;
-    
-    float correctedRsRo = rsRo / correction;
-    
-    // Toluene curve: PPM = 44.947 × (Rs/Ro)^(-3.445)
-    float ppm = 44.947 * pow(correctedRsRo, -3.445);
-    
-    // Clamp to reasonable range
-    if (ppm < 0.1) ppm = 0.1;
-    if (ppm > 999.0) ppm = 999.0;
-    
-    return ppm;
-}
-```
-
-**Gas Calibration Curves (from MQ135 datasheet):**
-
-| Gas | a | b | Use Case |
-|-----|---|---|----------|
-| **Toluene** | 44.947 | -3.445 | ✓ VOC/Styrene approximation (used) |
-| Acetone | 34.668 | -3.369 | Alternative VOC proxy |
-| CO2 | 116.602 | -2.769 | Not a VOC - don't use for VOC |
-| NH3 | 102.2 | -2.473 | Ammonia detection |
-| CO | 605.18 | -3.937 | Carbon monoxide |
-
-**Important Notes:**
-- This is an **estimation**, not a precise measurement
-- MQ135 cannot distinguish between different VOCs
-- Toluene curve provides a reasonable approximation for aromatic VOCs
-- Values should be interpreted as relative indicators, not absolute concentrations
-
-**What We Display:**
-```
-Tol:2.5ppm
-    │
-    └── Estimated Toluene-equivalent PPM (0.1-999 range)
-```
-
-### 3.3 Screen 2: Status Screen
-
-System diagnostics, calibration status, and sensor health information:
-
-```
-┌────────────────────────────────┐  ← Frame border (drawFrame)
-│STATUS                          │  Y=7:  Header
-├────────────────────────────────┤  Y=9:  Horizontal separator (drawHLine)
-│DHT11: OK                       │  Y=17: DHT11 sensor status
-│MQ135 Ro: 10.00 kOhm            │  Y=25: MQ135 baseline resistance
-│Calibrated: No                  │  Y=33: Calibration flag
-│Heap: 245632 bytes              │  Y=41: Free heap memory
-│Uptime: 125m 34s                │  Y=49: Time since boot
-│                                │
-│BTN: cycle screens              │  Y=61: User instruction
-└────────────────────────────────┘
-        128 × 64 pixels (using 4x6 font)
-```
-
-**Character Count Verification (4x6 font = 32 chars max per line):**
-
-| Line | Content Example | Max Chars | Status |
-|------|-----------------|-----------|--------|
-| 1 | `STATUS` | 6 | ✓ |
-| 2 | `DHT11: ERROR` | 12 | ✓ |
-| 3 | `MQ135 Ro: 99.99 kOhm` | 20 | ✓ |
-| 4 | `Calibrated: Yes` | 15 | ✓ |
-| 5 | `Heap: 999999 bytes` | 18 | ✓ |
-| 6 | `Uptime: 999m 59s` | 16 | ✓ |
-| 7 | `BTN: cycle screens` | 18 | ✓ |
-
-**Screen Elements:**
-- **Frame**: 1px border around entire screen (0,0 to 128,64)
-- **Header**: "STATUS" at top-left
-- **Separator**: Horizontal line at Y=9
-- **DHT11 Status**: Shows "OK" if valid reading, "ERROR" if sensor failed
-- **MQ135 Ro**: Baseline resistance value (calibrated or default 10kΩ)
-- **Calibrated**: "Yes" if user performed calibration, "No" if using default
-- **Heap**: Free memory in bytes (ESP32 health indicator)
-- **Uptime**: Minutes and seconds since boot
-- **Instruction**: Button cycles through screens
-
-**Verdict: FITS** ✓
-
-### 3.3.1 Sensor Calibration Requirements
+### 3.4 Sensor Calibration Requirements
 
 | Sensor | User Calibration | Frequency | Method |
 |--------|------------------|-----------|--------|
-| **DHT11** | ❌ Not needed | N/A | Factory calibrated, ±2°C / ±5% RH accuracy |
-| **MQ135** | ✅ Required | Once (or yearly) | Compile-time flag, run in clean air |
 | **ENS160** | ⚠️ Auto | Every power-on | Self-calibrates over ~1 hour, no user action |
 | **AHT20** | ❌ Not needed | N/A | Factory calibrated, ±0.3°C / ±2% RH accuracy |
-
-**MQ135 Calibration Procedure:**
-1. Ensure sensor has completed 24-48h burn-in period (first use only)
-2. Place device in clean air environment
-3. Uncomment `#define CALIBRATION_MODE` in `config.h`
-4. Upload firmware → calibration runs automatically on boot (~5 seconds)
-5. Comment out `CALIBRATION_MODE` and re-upload for normal operation
-6. Calibration value (Ro) persists in NVS across reboots
 
 **ENS160 Auto-Calibration:**
 - Uses built-in baseline algorithm
 - Takes ~1 hour after power-on to stabilize
 - Learns environment over 24 hours for best accuracy
 - No user intervention required
-- Optional: Save/restore baseline to NVS for faster startup (future enhancement)
-
-**Why MQ135 Needs Manual Calibration:**
-- Analog sensor with no built-in intelligence
-- Baseline resistance (Ro) varies between individual sensors
-- Environmental factors affect baseline
-- Sensor degrades over 2-5 years of use
-
-### 3.4 Screen State Machine
-
-```
-┌─────────────────┐
-│   SCREEN OFF    │◄─────────────────────────────────┐
-│   (Backlight    │                                   │
-│    off, LCD     │                                   │
-│    still runs)  │                                   │
-└────────┬────────┘                                   │
-         │ Button Press                               │
-         ▼                                            │
-┌─────────────────┐                                   │
-│   MAIN SCREEN   │                                   │
-│                 │                                   │
-│ • Chamber TVOC  │                                   │
-│ • Chamber eCO2  │                                   │
-│ • Room TVOC     │                                   │
-│ • Room eCO2     │                                   │
-│ • Temp/RH       │                                   │
-│ • MQ135 trend   │                                   │
-│ • WiFi/Push     │                                   │
-└────────┬────────┘                                   │
-         │ Button Press                               │
-         ▼                                            │
-┌─────────────────┐                                   │
-│  STATUS SCREEN  │                                   │
-│                 │                                   │
-│ • WiFi status   │                                   │
-│ • IP address    │                                   │
-│ • Push enabled  │                                   │
-│ • Last push     │                                   │
-│ • Free memory   │                                   │
-└────────┬────────┘                                   │
-         │ Button Press                               │
-         └────────────────────────────────────────────┘
-```
-
-### 3.5 No Time Display
-
-**Why no clock?**
-- ESP32 has no RTC (Real-Time Clock) hardware
-- Cannot assume internet access for NTP time sync
-- Local network may not allow public internet access
-- Adding RTC module adds complexity and cost
-
-**Alternative**: Show "uptime" (time since boot) on status screen if needed.
 
 ---
 
@@ -628,7 +381,7 @@ System diagnostics, calibration status, and sensor health information:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                        ESP32 SOFTWARE ARCHITECTURE                       │
+│                       ESP8266 SOFTWARE ARCHITECTURE                      │
 │                                                                          │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │                      APPLICATION LAYER                             │  │
@@ -642,10 +395,10 @@ System diagnostics, calibration status, and sensor health information:
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │                        DRIVER LAYER                                │  │
 │  │                                                                    │  │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────┐   │  │
-│  │  │ ENS160   │  │  AHT20   │  │  MQ135   │  │    U8g2 LCD      │   │  │
-│  │  │ Driver   │  │  Driver  │  │  Driver  │  │    Display       │   │  │
-│  │  └──────────┘  └──────────┘  └──────────┘  └──────────────────┘   │  │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────────────┐                 │  │
+│  │  │ ENS160   │  │  AHT20   │  │    U8g2 LCD      │                 │  │
+│  │  │ Driver   │  │  Driver  │  │    Display       │                 │  │
+│  │  └──────────┘  └──────────┘  └──────────────────┘                 │  │
 │  │                                                                    │  │
 │  │  ┌──────────────────────────────────────────────────────────────┐ │  │
 │  │  │                     Button Handler                            │ │  │
@@ -655,9 +408,9 @@ System diagnostics, calibration status, and sensor health information:
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │                    HAL / PLATFORM LAYER                            │  │
 │  │                                                                    │  │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐          │  │
-│  │  │   I2C    │  │   SPI    │  │   ADC    │  │  GPIO    │          │  │
-│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘          │  │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐                         │  │
+│  │  │   I2C    │  │   SPI    │  │  GPIO    │                         │  │
+│  │  └──────────┘  └──────────┘  └──────────┘                         │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │                                                                          │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -672,19 +425,7 @@ voc-monitor/
 │   ├── config.h                # Pin definitions, constants
 │   └── credentials.h           # WiFi credentials (gitignored)
 ├── src/
-│   ├── main.cpp                # Entry point
-│   ├── sensors/
-│   │   ├── sensor_manager.cpp
-│   │   ├── ens160_driver.cpp
-│   │   ├── aht20_driver.cpp
-│   │   └── mq135_driver.cpp
-│   ├── display/
-│   │   ├── display_manager.cpp
-│   │   └── screens.cpp
-│   ├── network/
-│   │   └── wifi_manager.cpp
-│   └── input/
-│       └── button_handler.cpp
+│   └── main.cpp                # Main application
 └── test/
 ```
 
@@ -700,7 +441,6 @@ voc-monitor/
 │  Initialize     │
 │  - I2C Buses    │
 │  - SPI (LCD)    │
-│  - ADC          │
 │  - WiFi (opt)   │
 │  - Sensors      │
 └────────┬────────┘
@@ -746,9 +486,9 @@ voc-monitor/
 ```ini
 ; platformio.ini
 
-[env:esp32dev]
-platform = espressif32
-board = esp32dev
+[env:nodemcuv2]
+platform = espressif8266
+board = nodemcuv2
 framework = arduino
 monitor_speed = 115200
 upload_speed = 921600
@@ -769,7 +509,7 @@ build_flags =
 # Build
 pio run
 
-# Upload to ESP32
+# Upload to ESP8266
 pio run --target upload
 
 # Monitor serial output
@@ -784,7 +524,7 @@ pio device monitor
 | Adafruit AHTX0 | AHT20 sensor |
 | SparkFun ENS160 | ENS160 sensor |
 | ArduinoJson | JSON for WiFi |
-| WiFi | ESP32 WiFi (built-in) |
+| ESP8266WiFi | ESP8266 WiFi (built-in) |
 
 ---
 
@@ -794,25 +534,21 @@ pio device monitor
 
 | Component | Model/Spec | Qty | Notes |
 |-----------|------------|-----|-------|
-| Microcontroller | ESP32-WROOM-32 DevKit | 1 | 38-pin |
+| Microcontroller | NodeMCU v3 (ESP-12E) | 1 | Or Wemos D1 Mini |
 | VOC Sensor Module | ENS160 + AHT20 Combo | 2 | I2C |
-| Gas Sensor | MQ135 Module | 1 | Room only |
-| Display | 128x64 OLED (SSD1306) | 1 | SPI or I2C |
+| Display | ST7920 128x64 LCD | 1 | Serial mode |
 | Button | 6mm Tactile Switch | 1 | Momentary |
-| Resistor | 10kΩ 1/4W | 1 | Voltage divider |
-| Resistor | 20kΩ 1/4W | 1 | Voltage divider |
 | Power Supply | 5V 1A USB | 1 | |
 
 ### 6.2 Wire Count Summary
 
 | Connection | Wires |
 |------------|-------|
-| LCD (SPI) | 5 (CS, DC, RST, MOSI, SCK) + 2 (VCC, GND) = 7 |
+| LCD (SPI) | 4 (CS, Data, CLK, RST) + 1 (Backlight) + 2 (VCC, GND) = 7 |
 | I2C Bus 1 | 2 (SDA, SCL) + 2 (VCC, GND) = 4 |
 | I2C Bus 2 | 2 (SDA, SCL) + 2 (VCC, GND) = 4 |
-| MQ135 | 1 (AO) + 2 (VCC, GND) = 3 |
-| Button | 1 (GPIO) + 1 (GND) = 2 |
-| **Total** | **~20 wires** |
+| Button | 2 (GPIO, GND) |
+| **Total** | **~17 wires** |
 
 ---
 
@@ -820,13 +556,11 @@ pio device monitor
 
 ### 7.1 Assembly Checklist
 
-- [ ] Wire I2C Bus 1 (GPIO 21/22) to Chamber ENS160+AHT20
-- [ ] Wire I2C Bus 2 (GPIO 16/17) to Room ENS160+AHT20
-- [ ] Build MQ135 voltage divider (10k + 20k)
-- [ ] Connect MQ135 to GPIO 32
-- [ ] Connect LCD via SPI
-- [ ] Wire button between GPIO 26 and GND
-- [ ] Connect 5V power
+- [ ] Wire I2C Bus 1 (D1/D2) to Chamber ENS160+AHT20
+- [ ] Wire I2C Bus 2 (D5/D6) to Room ENS160+AHT20
+- [ ] Connect LCD via Software SPI (D0, D4, D7, D8) + Backlight (RX via 47Ω)
+- [ ] Wire button between D3 (GPIO 0) and GND
+- [ ] Connect 5V power via USB
 
 ### 7.2 Testing Procedure
 
@@ -842,6 +576,6 @@ pio device monitor
 
 - [ENS160 Datasheet](https://www.sciosense.com/products/environmental-sensors/ens160-digital-metal-oxide-multi-gas-sensor/)
 - [AHT20 Datasheet](http://www.aosong.com/en/products-32.html)
-- [MQ135 Datasheet](https://www.winsen-sensor.com/sensors/voc-sensor/mq135.html)
 - [U8g2 Library](https://github.com/olikraus/u8g2)
-- [ESP32 Technical Reference](https://www.espressif.com/sites/default/files/documentation/esp32_technical_reference_manual_en.pdf)
+- [ESP8266 Technical Reference](https://www.espressif.com/sites/default/files/documentation/esp8266-technical_reference_en.pdf)
+- [NodeMCU Documentation](https://nodemcu.readthedocs.io/)
