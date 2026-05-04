@@ -196,6 +196,10 @@ void readSensors() {
 bool wifiConnected = false;
 
 void connectWiFi() {
+    // Enable auto-reconnect - ESP8266 will automatically try to reconnect if connection drops
+    WiFi.setAutoReconnect(true);
+    WiFi.persistent(true);  // Remember credentials across reboots
+    
     Serial.printf("Connecting to WiFi: %s\n", SSID);
     WiFi.begin(SSID, PASSWD);
     
@@ -211,7 +215,7 @@ void connectWiFi() {
         Serial.printf("\nWiFi connected! IP: %s\n", WiFi.localIP().toString().c_str());
     } else {
         wifiConnected = false;
-        Serial.println("\nWiFi connection failed!");
+        Serial.println("\nWiFi connection failed! Will retry automatically.");
     }
 }
 
@@ -498,6 +502,11 @@ void setup() {
 // =============================================================================
 void loop() {
     static unsigned long lastRead = 0;
+    
+    // Update WiFi connection status for display accuracy
+    #if WIFI_ENABLED
+    wifiConnected = (WiFi.status() == WL_CONNECTED);
+    #endif
     
     if (millis() - lastRead >= SENSOR_READ_INTERVAL) {
         lastRead = millis();

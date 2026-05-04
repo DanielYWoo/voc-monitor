@@ -67,14 +67,14 @@ enum ScreenState {
 // WiFi Configuration
 // -----------------------------------------------------------------------------
 // Set to 1 to enable WiFi, 0 to disable
-#define WIFI_ENABLED          0
+#define WIFI_ENABLED          1
 
 // Set to 1 to push data to Klipper/Moonraker, 0 to disable
 // Requires WIFI_ENABLED = 1
 #define KLIPPER_PUSH_ENABLED  0
 
 // Klipper/Moonraker host (IP or hostname)
-#define KLIPPER_HOST          "192.168.1.100"
+#define KLIPPER_HOST          "kbox.local"
 #define KLIPPER_PORT          7125
 
 // Push interval (ms) - how often to send data to Klipper
