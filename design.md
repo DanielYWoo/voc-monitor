@@ -109,58 +109,52 @@ Using 128x64 LCD instead of color TFT saves significant memory and simplifies th
 
 ### 2.4 ESP32 Pin Assignment
 
+**Note:** This diagram shows a common 38-pin ESP32-WROOM-32E DevKit layout (USB port at bottom). Pin positions may vary between manufacturers - always verify your specific board's pinout. The GPIO numbers in the code are correct regardless of physical pin position.
+
 ```
-                         ┌─────────────────────────────┐
-                         │         ESP32 DevKit        │
-                         │        (38-pin WROOM)       │
-                         │                             │
-              3.3V ──────┤ 3V3                   GND   ├────── GND
-                         │                             │
-                         │ EN                   GPIO23 ├────── LCD R/W (Data)
-                         │                             │
-                         │ GPIO36 (VP)          GPIO22 ├────── I2C1_SCL (Chamber)
-                         │                             │
-                         │ GPIO39 (VN)          GPIO1  │ (TX0 - Reserved)
-                         │                             │
-                         │ GPIO34               GPIO3  │ (RX0 - Reserved)
-                         │                             │
-                         │ GPIO35               GPIO21 ├────── I2C1_SDA (Chamber)
-                         │                             │
-    MQ135 (Room) ────────┤ GPIO32               GPIO19 │
-                         │                             │
-    DHT11 (Room) ────────┤ GPIO33               GPIO18 ├────── LCD E (Clock)
-                         │                             │
-                         │ GPIO25               GPIO5  ├────── LCD RS (CS)
-                         │                             │
-    USER_BUTTON ─────────┤ GPIO26               GPIO17 ├────── I2C2_SCL (Room)
-                         │                             │
-                         │ GPIO27               GPIO16 ├────── I2C2_SDA (Room)
-                         │                             │
-                         │ GPIO14               GPIO4  │ (Free)
-                         │                             │
-                         │ GPIO12               GPIO2  │
-                         │                             │
-                         │ GPIO13               GPIO15 │
-                         │                             │
-                         │ GND                   GND   │
-                         │                             │
-              5V ────────┤ VIN                   3V3   │
-                         │                             │
-                         └─────────────────────────────┘
+    ESP32-WROOM-32E DevKit (38-pin)
+    
+    ┌─────────────────────────────────────────────────────┐
+    │                                                     │
+    │  3V3    ●  1                          38 ●  GND     │
+    │  EN     ●  2                          37 ●  GPIO23  │◄── LCD R/W (MOSI)
+    │  GPIO36 ●  3  (VP)                    36 ●  GPIO22  │◄── LCD RST
+    │  GPIO39 ●  4  (VN)                    35 ●  GPIO1   │    (TX0)
+    │  GPIO34 ●  5                          34 ●  GPIO3   │    (RX0)
+    │  GPIO35 ●  6                          33 ●  GPIO21  │◄── I2C1_SDA
+    │  GPIO32 ●  7  ◄── MQ135               32 ●  GND     │
+    │  GPIO33 ●  8  ◄── DHT11               31 ●  GPIO19  │
+    │  GPIO25 ●  9                          30 ●  GPIO18  │◄── LCD E (CLK)
+    │  GPIO26 ● 10  ◄── BUTTON              29 ●  GPIO5   │◄── LCD RS (CS)
+    │  GPIO27 ● 11                          28 ●  GPIO17  │◄── I2C2_SCL
+    │  GPIO14 ● 12                          27 ●  GPIO16  │◄── I2C2_SDA
+    │  GPIO12 ● 13                          26 ●  GPIO4   │
+    │  GND    ● 14                          25 ●  GPIO0   │
+    │  GPIO13 ● 15                          24 ●  GPIO2   │
+    │  SD2    ● 16                          23 ●  GPIO15  │
+    │  SD3    ● 17                          22 ●  SD1     │
+    │  CMD    ● 18                          21 ●  SD0     │
+    │  5V     ● 19                          20 ●  CLK     │
+    │                                                     │
+    ├─────────────────────────────────────────────────────┤
+    │                     ┌───┐                           │
+    │                     │USB│                           │
+    │                     └───┘                           │
+    └─────────────────────────────────────────────────────┘
 ```
 
 #### Pin Assignment Table
 
 | Function | GPIO | Direction | Notes |
 |----------|------|-----------|-------|
-| **ST7920 LCD (Serial Mode)** |
-| LCD_E (Clock) | GPIO 18 | Output | SPI Clock (SCK) |
-| LCD_R/W (Data) | GPIO 23 | Output | SPI Data (MOSI) |
-| LCD_RS (CS) | GPIO 5 | Output | Chip Select |
-| LCD_RST | N/A | N/A | Tied to 5V (not using GPIO) |
+| **ST7920 LCD (Hardware SPI Mode)** |
+| LCD_E (Clock) | GPIO 18 | Output | ESP32 VSPI CLK |
+| LCD_R/W (Data) | GPIO 23 | Output | ESP32 VSPI MOSI |
+| LCD_RS (CS) | GPIO 5 | Output | ESP32 VSPI CS |
+| LCD_RST | GPIO 22 | Output | Reset (active LOW) |
 | **I2C Bus 1 (Chamber)** |
 | I2C1_SDA | GPIO 21 | Bidirectional | ENS160+AHT20 |
-| I2C1_SCL | GPIO 22 | Output | 100kHz |
+| I2C1_SCL | GPIO 4 | Output | 100kHz (moved from GPIO 22) |
 | **I2C Bus 2 (Room)** |
 | I2C2_SDA | GPIO 16 | Bidirectional | ENS160+AHT20 |
 | I2C2_SCL | GPIO 17 | Output | 100kHz |
@@ -182,29 +176,32 @@ The ST7920 is a common 128x64 LCD controller used in 3D printer displays. It sup
                    │  ───   ────    ────────         │
                    │   1    GND     Ground           │
                    │   2    VCC     Power (5V)       │
-                   │   3    V0      Contrast (NC)    │
+                   │   3    V0      Contrast         │◄── GND (max contrast)
                    │   4    RS      Register Select  │◄── GPIO 5 (CS)
-                   │   5    R/W     Read/Write       │◄── GPIO 23 (Data)
-                   │   6    E       Enable           │◄── GPIO 18 (Clock)
+                   │   5    R/W     Read/Write       │◄── GPIO 23 (MOSI)
+                   │   6    E       Enable           │◄── GPIO 18 (CLK)
                    │  7-14  DB0-7   Data Bus (NC)    │    (Not used in serial mode)
                    │  15    PSB     Bus Select       │◄── GND (Serial mode)
                    │  16    NC      Not Connected    │
                    │  17    RST     Reset            │◄── 5V (tied high)
                    │  18    VOUT    LCD Drive (NC)   │
-                   │  19    BLA     Backlight +      │◄── 5V via 100Ω
+                   │  19    BLA     Backlight +      │◄── 3.3V (direct)
                    │  20    BLK     Backlight -      │◄── GND
                    └─────────────────────────────────┘
 
-    Serial Mode Pin Functions:
+    Hardware SPI Mode Pin Functions (ESP32 VSPI):
     ┌─────────┬────────────────────────────────────────────────────────┐
-    │ LCD Pin │ Serial Mode Function                                   │
+    │ LCD Pin │ Hardware SPI Function                                  │
     ├─────────┼────────────────────────────────────────────────────────┤
-    │ RS      │ Chip Select (CS) - Pull LOW to start communication     │
-    │ R/W     │ Data Line (MOSI) - Serial data input                   │
-    │ E       │ Clock (SCK) - Data sampled on rising edge              │
+    │ RS      │ Chip Select (CS) - GPIO 5                              │
+    │ R/W     │ Data Line (MOSI) - GPIO 23                             │
+    │ E       │ Clock (CLK) - GPIO 18 (VSPI CLK)                       │
     │ PSB     │ Mode Select - GND = Serial, VCC = Parallel             │
-    │ RST     │ Reset - Active LOW, can tie to VCC if not needed       │
+    │ RST     │ Reset - 5V (tied high, no GPIO needed)                 │
+    │ V0      │ Contrast - GND for maximum contrast                    │
     └─────────┴────────────────────────────────────────────────────────┘
+    
+    Reference: https://www.instructables.com/ST7920-128X64-LCD-Display-to-ESP32/
 ```
 
 ### 2.6 Circuit Schematics
@@ -259,7 +256,27 @@ The ST7920 is a common 128x64 LCD controller used in 3D printer displays. It sup
           If using bare DHT11 sensor, add 10kΩ pull-up between DATA and VCC.
 ```
 
-#### 2.6.3 I2C Bus Connections
+#### 2.6.3 ST7920 LCD Wiring (Hardware SPI)
+
+```
+    ST7920 LCD Module               ESP32
+    ┌─────────────┐                ┌─────┐
+    │             │                │     │
+    │  VCC (2) ───┼────────────────┤ 5V  │
+    │  GND (1) ───┼────────────────┤ GND │
+    │  V0  (3) ───┼────────────────┤ GND │  (Max contrast)
+    │  RS  (4) ───┼────────────────┤ 5   │  (CS)
+    │  R/W (5) ───┼────────────────┤ 23  │  (MOSI)
+    │  E   (6) ───┼────────────────┤ 18  │  (CLK)
+    │  PSB(15) ───┼────────────────┤ GND │  (Serial mode)
+    │  RST(17) ───┼────────────────┤ 5V  │  (Tied high)
+    │  BLA(19) ───┼────────────────┤ 3V3 │  (Backlight)
+    │  BLK(20) ───┼────────────────┤ GND │
+    │             │                │     │
+    └─────────────┘                └─────┘
+```
+
+#### 2.6.4 I2C Bus Connections
 
 ```
     I2C BUS 1 (Chamber)                    I2C BUS 2 (Room)
@@ -268,7 +285,7 @@ The ST7920 is a common 128x64 LCD controller used in 3D printer displays. It sup
     ESP32          ENS160+AHT20            ESP32          ENS160+AHT20
     ┌─────┐       ┌─────────────┐          ┌─────┐       ┌─────────────┐
     │ 21  ├───────┤ SDA         │          │ 16  ├───────┤ SDA         │
-    │ 22  ├───────┤ SCL         │          │ 17  ├───────┤ SCL         │
+    │  4  ├───────┤ SCL         │          │ 17  ├───────┤ SCL         │
     │ 3V3 ├───────┤ VCC         │          │ 3V3 ├───────┤ VCC         │
     │ GND ├───────┤ GND         │          │ GND ├───────┤ GND         │
     └─────┘       └─────────────┘          └─────┘       └─────────────┘
@@ -276,6 +293,9 @@ The ST7920 is a common 128x64 LCD controller used in 3D printer displays. It sup
     WHY TWO I2C BUSES?
     The AHT20 has a FIXED I2C address of 0x38 that cannot be changed.
     To use two AHT20 sensors, we need two separate I2C buses.
+    
+    NOTE: I2C1_SCL moved from GPIO 22 to GPIO 4 because GPIO 22 is now
+    used for LCD RST (Hardware SPI mode).
 ```
 
 ---

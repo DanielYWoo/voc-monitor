@@ -9,11 +9,12 @@
 // Pin Definitions - ESP32-WROOM-32 DevKit (38-pin)
 // -----------------------------------------------------------------------------
 
-// SPI LCD (128x64 ST7920)
-#define LCD_SCK   18    // SPI Clock (E pin)
-#define LCD_MOSI  23    // SPI Data (R/W pin)
-#define LCD_CS    5     // Chip Select (RS pin)
-// LCD_RST is tied to 5V directly, not using GPIO
+// ST7920 LCD (128x64) - Hardware SPI Mode
+// Based on: https://www.instructables.com/ST7920-128X64-LCD-Display-to-ESP32/
+#define LCD_SCK   18    // Clock (E pin) - ESP32 VSPI CLK
+#define LCD_MOSI  23    // Data (R/W pin) - ESP32 VSPI MOSI
+#define LCD_CS    5     // Chip Select (RS pin) - ESP32 VSPI CS
+// LCD_RST is tied to 5V (no GPIO needed)
 
 // I2C Bus 1 - Chamber sensors (ENS160 + AHT20)
 #define I2C1_SDA  21

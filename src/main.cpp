@@ -4,11 +4,19 @@
  * Reads from DHT11 (temperature/humidity) and MQ135 (VOC) sensors,
  * displays on ST7920 128x64 LCD.
  * 
- * ST7920 LCD Wiring (Serial/SPI Mode):
- *   VCC  -> 5V, GND -> GND
- *   RS   -> GPIO 5 (CS), R/W -> GPIO 23 (Data), E -> GPIO 18 (Clock)
- *   PSB  -> GND (serial mode), RST -> 5V
- *   BLA  -> 5V via 100Ω, BLK -> GND
+ * ST7920 LCD Wiring (Hardware SPI Mode):
+ *   VCC  -> 5V (pin 2)
+ *   GND  -> GND (pin 1)
+ *   V0   -> GND (pin 3) - max contrast
+ *   RS   -> GPIO 5 (CS) (pin 4)
+ *   R/W  -> GPIO 23 (MOSI) (pin 5)
+ *   E    -> GPIO 18 (CLK) (pin 6)
+ *   PSB  -> GND (serial mode) (pin 15)
+ *   RST  -> 5V (pin 17) - tied high, no GPIO needed
+ *   BLA  -> 3.3V (backlight) (pin 19)
+ *   BLK  -> GND (pin 20)
+ * 
+ * Based on: https://www.instructables.com/ST7920-128X64-LCD-Display-to-ESP32/
  * 
  * DHT11: VCC -> 3.3V, DATA -> GPIO 33, GND -> GND
  * MQ135: VCC -> 5V, AO -> voltage divider -> GPIO 32, GND -> GND
@@ -32,24 +40,37 @@
 // =============================================================================
 // Hardware Setup
 // =============================================================================
-U8G2_ST7920_128X64_F_SW_SPI u8g2(U8G2_R0, LCD_SCK, LCD_MOSI, LCD_CS, U8X8_PIN_NONE);
+// ST7920 in serial mode
+// 
+// Based on: https://www.instructables.com/ST7920-128X64-LCD-Display-to-ESP32/
+// The article uses Hardware SPI with these pins:
+//   LCD RS (pin 4)  → GPIO 5  (SPI CS)
+//   LCD R/W (pin 5) → GPIO 23 (SPI MOSI) 
+//   LCD E (pin 6)   → GPIO 18 (SPI CLK) - VSPI hardware clock
+//   LCD RST (pin 17)→ 5V (tied high, no GPIO needed)
+//
+// IMPORTANT: Use Hardware SPI constructor, not Software SPI!
+// The ESP32 VSPI pins are: CLK=18, MOSI=23, CS=5
+//
+// Hardware SPI constructor (recommended for ESP32):
+// U8X8_PIN_NONE means RST is tied to VCC (no software reset needed)
+U8G2_ST7920_128X64_F_HW_SPI u8g2(U8G2_R0, /* cs=RS */ 5, /* reset */ U8X8_PIN_NONE);
+
+// If hardware SPI doesn't work, try software SPI with GPIO 18:
+// U8G2_ST7920_128X64_F_SW_SPI u8g2(U8G2_R0, /* clock=E */ 18, /* data=R/W */ 23, /* cs=RS */ 5, /* reset */ 22);
+
 DHT dht(DHT11_PIN, DHT11);
 Preferences prefs;
 
 // =============================================================================
-// Sensor Data - Only raw readings and final outputs
+// Sensor Data
 // =============================================================================
 struct SensorData {
-    // DHT11 readings
     float temperature;    // °C
     float humidity;       // %
     bool dhtValid;        // true if reading is valid
-    
-    // MQ135 output
     float toluenePPM;     // Estimated Toluene PPM
     int rawADC;           // Raw ADC for debugging
-    
-    // Calibration (stored in NVS)
     float mq135Ro;        // Baseline resistance in clean air (kΩ)
     bool calibrated;      // true if user calibrated
 };
@@ -71,7 +92,7 @@ ScreenState currentScreen = SCREEN_MAIN;
 volatile bool screenChanged = false;
 
 // =============================================================================
-// Button ISR - Only sets flag, no debounce logic in ISR
+// Button ISR
 // =============================================================================
 void IRAM_ATTR buttonISR() {
     static unsigned long lastPress = 0;
@@ -87,23 +108,18 @@ void IRAM_ATTR buttonISR() {
 // MQ135 Reading with Temperature/Humidity Compensation
 // =============================================================================
 float readMQ135(float temp, float humidity, bool tempValid) {
-    // Read raw ADC
     int raw = analogRead(MQ135_PIN);
     data.rawADC = raw;
     
-    // Convert to voltage (ESP32 ADC: 12-bit, 0-3.3V)
     float voltage = raw * (3.3f / 4095.0f);
     if (voltage < 0.01f) voltage = 0.01f;
     
     // Reconstruct original MQ135 voltage (before 10k+20k divider)
-    // Vout = Vin * 20k / (10k + 20k) => Vin = Vout * 1.5
     float mq135Voltage = voltage * 1.5f;
     if (mq135Voltage > 4.9f) mq135Voltage = 4.9f;
     
     // Calculate sensor resistance: Rs = RL * (Vc - Vout) / Vout
     float rs = MQ135_RL * (5.0f - mq135Voltage) / mq135Voltage;
-    
-    // Calculate Rs/Ro ratio
     float rsRo = rs / data.mq135Ro;
     
     // Apply temperature/humidity correction if available
@@ -117,8 +133,6 @@ float readMQ135(float temp, float humidity, bool tempValid) {
     
     // Calculate Toluene PPM: PPM = a * (Rs/Ro)^b
     float ppm = MQ135_TOLUENE_A * powf(rsRo, MQ135_TOLUENE_B);
-    
-    // Clamp to reasonable range
     return constrain(ppm, 0.1f, 999.0f);
 }
 
@@ -126,7 +140,6 @@ float readMQ135(float temp, float humidity, bool tempValid) {
 // Read All Sensors
 // =============================================================================
 void readSensors() {
-    // Read DHT11
     float t = dht.readTemperature();
     float h = dht.readHumidity();
     
@@ -138,10 +151,8 @@ void readSensors() {
         data.dhtValid = true;
     }
     
-    // Read MQ135 with compensation
     data.toluenePPM = readMQ135(data.temperature, data.humidity, data.dhtValid);
     
-    // Debug output
     Serial.printf("DHT11: %.1f°C %.1f%% (%s) | MQ135: %.1fppm (raw:%d)\n",
                   data.temperature, data.humidity, 
                   data.dhtValid ? "OK" : "ERR",
@@ -149,7 +160,7 @@ void readSensors() {
 }
 
 // =============================================================================
-// MQ135 Calibration - Call in clean air after 24h burn-in
+// MQ135 Calibration
 // =============================================================================
 void calibrateMQ135() {
     Serial.println("Calibrating MQ135 in clean air...");
@@ -175,20 +186,19 @@ void calibrateMQ135() {
         data.mq135Ro = rsSum / count;
         data.calibrated = true;
         
-        // Save to NVS
         prefs.begin("voc", false);
         prefs.putFloat("mq135Ro", data.mq135Ro);
         prefs.putBool("calibrated", true);
         prefs.end();
         
-        Serial.printf("Calibration done. Ro = %.2f kΩ (saved to NVS)\n", data.mq135Ro);
+        Serial.printf("Calibration done. Ro = %.2f kΩ\n", data.mq135Ro);
     } else {
         Serial.println("Calibration failed!");
     }
 }
 
 void loadCalibration() {
-    prefs.begin("voc", true);  // Read-only
+    prefs.begin("voc", true);
     if (prefs.isKey("mq135Ro")) {
         data.mq135Ro = prefs.getFloat("mq135Ro", MQ135_RO_CLEAN_AIR);
         data.calibrated = prefs.getBool("calibrated", false);
@@ -198,7 +208,7 @@ void loadCalibration() {
 }
 
 // =============================================================================
-// WiFi Functions (only compiled if WIFI_ENABLED)
+// WiFi Functions
 // =============================================================================
 #if WIFI_ENABLED
 bool wifiConnected = false;
@@ -227,14 +237,11 @@ void connectWiFi() {
 unsigned long lastKlipperPush = 0;
 
 void pushToKlipper() {
-    if (!wifiConnected || WiFi.status() != WL_CONNECTED) {
-        return;
-    }
+    if (!wifiConnected || WiFi.status() != WL_CONNECTED) return;
     
     HTTPClient http;
     String url = String("http://") + KLIPPER_HOST + ":" + KLIPPER_PORT + "/server/database/item";
     
-    // Build JSON payload
     String payload = "{\"namespace\":\"voc_monitor\",\"key\":\"sensor_data\",\"value\":{";
     payload += "\"temperature\":" + String(data.temperature, 1) + ",";
     payload += "\"humidity\":" + String(data.humidity, 1) + ",";
@@ -256,8 +263,8 @@ void pushToKlipper() {
     
     http.end();
 }
-#endif // KLIPPER_PUSH_ENABLED
-#endif // WIFI_ENABLED
+#endif
+#endif
 
 // =============================================================================
 // Display Functions
@@ -348,7 +355,10 @@ void setup() {
     delay(500);
     Serial.println("\n=== VoC Monitor ===\n");
     
-    // Button with interrupt
+    // Print pin configuration
+    Serial.println("LCD Pins: E(Clock)=GPIO2, R/W(Data)=GPIO23, RS(CS)=GPIO5");
+    
+    // Button
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonISR, FALLING);
     
@@ -359,31 +369,48 @@ void setup() {
     analogReadResolution(12);
     analogSetAttenuation(ADC_11db);
     
-    // Load calibration from NVS (or run calibration if CALIBRATION_MODE is defined)
+    // Load or run calibration
     #ifdef CALIBRATION_MODE
-    Serial.println("*** CALIBRATION MODE - Running calibration on boot ***");
-    delay(2000);  // Give sensor time to warm up
+    delay(2000);
     calibrateMQ135();
     #else
     loadCalibration();
     #endif
     
-    // Display
-    u8g2.begin();
-    u8g2.setContrast(255);
+    // LCD - ST7920 needs time to power up (40ms minimum per datasheet)
+    Serial.println("Initializing LCD...");
+    delay(100);  // Wait for LCD power stabilization
     
-    // WiFi (if enabled)
+    u8g2.begin();
+    Serial.println("u8g2.begin() done");
+    
+    delay(100);  // Additional delay after init
+    u8g2.setPowerSave(0);
+    Serial.println("Power save off");
+    
+    // Draw test pattern
+    Serial.println("Drawing test pattern...");
+    u8g2.clearBuffer();
+    u8g2.setFont(u8g2_font_ncenB08_tr);
+    u8g2.drawStr(0, 12, "Hello World!");
+    u8g2.drawBox(0, 20, 50, 10);
+    u8g2.drawFrame(60, 20, 50, 10);
+    u8g2.sendBuffer();
+    Serial.println("Test pattern sent");
+    
+    delay(3000);  // Show test pattern for 3 seconds
+    
+    // WiFi
     #if WIFI_ENABLED
     connectWiFi();
     #endif
     
     // Initial read
-    delay(2000);
+    delay(1000);
     readSensors();
     updateDisplay();
     
-    Serial.println("Ready. Press button to cycle screens.");
-    Serial.println("To calibrate: uncomment CALIBRATION_MODE in config.h and re-upload.\n");
+    Serial.println("Ready.");
 }
 
 // =============================================================================
@@ -392,14 +419,12 @@ void setup() {
 void loop() {
     static unsigned long lastRead = 0;
     
-    // Read sensors periodically
     if (millis() - lastRead >= SENSOR_READ_INTERVAL) {
         lastRead = millis();
         readSensors();
         updateDisplay();
     }
     
-    // Push to Klipper periodically (if enabled)
     #if WIFI_ENABLED && KLIPPER_PUSH_ENABLED
     if (millis() - lastKlipperPush >= KLIPPER_PUSH_INTERVAL) {
         lastKlipperPush = millis();
@@ -407,16 +432,10 @@ void loop() {
     }
     #endif
     
-    // Update display on screen change
     if (screenChanged) {
         screenChanged = false;
         updateDisplay();
     }
     
-    // Light sleep for power saving (optional - comment out if not needed)
-    // esp_sleep_enable_timer_wakeup(100 * 1000);  // 100ms
-    // esp_sleep_enable_ext0_wakeup(GPIO_NUM_26, 0);
-    // esp_light_sleep_start();
-    
-    delay(50);  // Simple delay instead of busy loop
+    delay(50);
 }
