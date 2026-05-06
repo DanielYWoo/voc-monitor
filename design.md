@@ -375,9 +375,132 @@ Shows WiFi and Klipper push status details.
 
 ---
 
-## 4. Software Design
+## 4. Web Dashboard
 
-### 4.1 Software Architecture
+### 4.1 Overview
+
+The VoC Monitor includes a built-in web dashboard accessible via WiFi. The ESP8266 serves a responsive HTML page with real-time charts using Chart.js.
+
+### 4.2 Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         WEB DASHBOARD ARCHITECTURE                       │
+│                                                                          │
+│   ┌─────────────────┐                      ┌─────────────────────────┐  │
+│   │   ESP8266       │                      │   Browser (Client)      │  │
+│   │                 │                      │                         │  │
+│   │  ┌───────────┐  │    HTTP Request      │  ┌─────────────────┐   │  │
+│   │  │ Async     │◄─┼──────────────────────┼──│ fetch('/api/...')│   │  │
+│   │  │ WebServer │  │                      │  └─────────────────┘   │  │
+│   │  └─────┬─────┘  │    JSON Response     │           │            │  │
+│   │        │        │──────────────────────┼──►        ▼            │  │
+│   │        ▼        │                      │  ┌─────────────────┐   │  │
+│   │  ┌───────────┐  │                      │  │   Chart.js      │   │  │
+│   │  │ History   │  │                      │  │   (CDN loaded)  │   │  │
+│   │  │ Buffer    │  │                      │  └─────────────────┘   │  │
+│   │  │ (30 pts)  │  │                      │                         │  │
+│   │  └───────────┘  │                      │                         │  │
+│   └─────────────────┘                      └─────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 4.3 Data Flow
+
+```
+Sensor Reading (1 Hz)
+        │
+        ▼
+┌───────────────────┐
+│ Running Average   │  ◄── Welford's incremental algorithm
+│ (double precision)│      avg = avg + (new - avg) / count
+└─────────┬─────────┘
+          │
+          │ After 60 samples (1 minute)
+          ▼
+┌───────────────────┐
+│ History Buffer    │  ◄── Circular buffer, 30 points
+│ (uint16_t × 8)    │      16 bytes per point = 480 bytes
+└─────────┬─────────┘
+          │
+          │ Client request (/api/data)
+          ▼
+┌───────────────────┐
+│ JSON Response     │  ◄── Oldest to newest order
+│ (30 data points)  │
+└───────────────────┘
+```
+
+### 4.4 Memory Usage
+
+| Component | Size | Notes |
+|-----------|------|-------|
+| Running average | 65 bytes | 8 × double (64 bytes) + counter (1 byte) |
+| History buffer | 480 bytes | 30 × 16 bytes per point |
+| HTML page | ~4 KB | Stored in PROGMEM (flash) |
+| JSON buffer | ~2 KB | StaticJsonDocument for API responses |
+| **Total RAM** | ~550 bytes | Plus temporary JSON buffers |
+
+### 4.5 API Endpoints
+
+| Endpoint | Method | Response | Description |
+|----------|--------|----------|-------------|
+| `/` | GET | HTML | Dashboard page with Chart.js |
+| `/api/current` | GET | JSON | Current running average values |
+| `/api/data` | GET | JSON | Historical data (30 points) |
+
+**Example `/api/current` response:**
+```json
+{
+  "ch_tvoc": 150,
+  "ch_eco2": 450,
+  "ch_temp": 28,
+  "ch_rh": 55,
+  "rm_tvoc": 80,
+  "rm_eco2": 420,
+  "rm_temp": 24,
+  "rm_rh": 50,
+  "samples": 45
+}
+```
+
+**Example `/api/data` response:**
+```json
+[
+  {"ch_tvoc": 148, "ch_eco2": 448, "ch_temp": 27, "ch_rh": 54, "rm_tvoc": 78, "rm_eco2": 418, "rm_temp": 24, "rm_rh": 50},
+  {"ch_tvoc": 150, "ch_eco2": 450, "ch_temp": 28, "ch_rh": 55, "rm_tvoc": 80, "rm_eco2": 420, "rm_temp": 24, "rm_rh": 50},
+  ...
+]
+```
+
+### 4.6 Client Refresh Rates
+
+| Data | Refresh Interval | Reason |
+|------|------------------|--------|
+| Current values | 5 seconds | Near real-time display |
+| History chart | 30 seconds | Data only changes every 60 seconds |
+
+### 4.7 ESPAsyncWebServer
+
+The web server uses `ESPAsyncWebServer` library for non-blocking operation:
+
+- **Non-blocking**: Requests are handled via callbacks, not blocking the main loop
+- **Efficient**: Uses LWIP async TCP callbacks
+- **Cooperative**: Requires `delay()` or `yield()` in loop for WiFi stack processing
+
+```cpp
+// No handleClient() needed in loop
+void loop() {
+    // ... sensor reading, display update ...
+    delay(50);  // Yields to WiFi stack and async callbacks
+}
+```
+
+---
+
+## 5. Software Design
+
+### 5.1 Software Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -498,6 +621,8 @@ lib_deps =
     adafruit/Adafruit AHTX0@^2.0.3
     sparkfun/SparkFun Indoor Air Quality Sensor - ENS160@^1.0.0
     bblanchon/ArduinoJson@^6.21.0
+    me-no-dev/ESPAsyncTCP@^1.2.2
+    https://github.com/me-no-dev/ESPAsyncWebServer.git
 
 build_flags = 
     -DCORE_DEBUG_LEVEL=3
@@ -523,8 +648,10 @@ pio device monitor
 | U8g2 | 128x64 LCD driver |
 | Adafruit AHTX0 | AHT20 sensor |
 | SparkFun ENS160 | ENS160 sensor |
-| ArduinoJson | JSON for WiFi |
+| ArduinoJson | JSON serialization for API |
 | ESP8266WiFi | ESP8266 WiFi (built-in) |
+| ESPAsyncWebServer | Non-blocking web server |
+| ESPAsyncTCP | Async TCP for web server |
 
 ---
 
