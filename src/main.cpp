@@ -43,6 +43,7 @@
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 #include "credentials.h"
+#include "web_content.h"
 #endif
 
 // =============================================================================
@@ -77,8 +78,8 @@ struct SensorData {
 };
 
 SensorData data = {
-    .chamberTVOC = 0, .chamberECO2 = 400, .chamberTemp = 25, .chamberHumidity = 50, .chamberValid = false,
-    .roomTVOC = 0, .roomECO2 = 400, .roomTemp = 25, .roomHumidity = 50, .roomValid = false
+    .chamberTVOC = -1, .chamberECO2 = -1, .chamberTemp = -1, .chamberHumidity = -1, .chamberValid = false,
+    .roomTVOC = -1, .roomECO2 = -1, .roomTemp = -1, .roomHumidity = -1, .roomValid = false
 };
 
 // =============================================================================
@@ -122,144 +123,16 @@ volatile bool screenChanged = false;
 volatile bool buttonPressed = false;
 
 // =============================================================================
+// Forward Declarations
+// =============================================================================
+void drawBootScreen(const char* status, uint8_t progress = 0);
+
+// =============================================================================
 // WiFi and Web Server
 // =============================================================================
 #if WIFI_ENABLED
 bool wifiConnected = false;
 AsyncWebServer server(80);
-
-// HTML page stored in PROGMEM
-const char INDEX_HTML[] PROGMEM = R"rawliteral(
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VoC Monitor</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #eee; padding: 20px; }
-        h1 { text-align: center; margin-bottom: 20px; color: #00d4ff; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 20px; }
-        .card { background: #16213e; border-radius: 12px; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
-        .card h2 { font-size: 1.1em; color: #888; margin-bottom: 15px; text-transform: uppercase; letter-spacing: 1px; }
-        .value { font-size: 2.5em; font-weight: bold; }
-        .unit { font-size: 0.5em; color: #888; }
-        .chamber { color: #ff6b6b; }
-        .room { color: #4ecdc4; }
-        .chart-container { background: #16213e; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
-        .status { text-align: center; color: #666; font-size: 0.9em; margin-top: 20px; }
-        .good { color: #4ecdc4; }
-        .warning { color: #ffd93d; }
-        .danger { color: #ff6b6b; }
-    </style>
-</head>
-<body>
-    <h1>🌬️ VoC Monitor</h1>
-    
-    <div class="grid">
-        <div class="card">
-            <h2>Chamber</h2>
-            <div class="value chamber"><span id="ch-tvoc">--</span><span class="unit"> ppb TVOC</span></div>
-            <div class="value chamber"><span id="ch-eco2">--</span><span class="unit"> ppm eCO₂</span></div>
-            <div style="margin-top:10px;color:#888"><span id="ch-temp">--</span>°C | <span id="ch-rh">--</span>% RH</div>
-        </div>
-        <div class="card">
-            <h2>Room</h2>
-            <div class="value room"><span id="rm-tvoc">--</span><span class="unit"> ppb TVOC</span></div>
-            <div class="value room"><span id="rm-eco2">--</span><span class="unit"> ppm eCO₂</span></div>
-            <div style="margin-top:10px;color:#888"><span id="rm-temp">--</span>°C | <span id="rm-rh">--</span>% RH</div>
-        </div>
-    </div>
-    
-    <div class="chart-container">
-        <canvas id="tvocChart" height="120"></canvas>
-    </div>
-    <div class="chart-container">
-        <canvas id="eco2Chart" height="120"></canvas>
-    </div>
-    
-    <div class="status">Last update: <span id="lastUpdate">--</span></div>
-    
-    <script>
-        const tvocCtx = document.getElementById('tvocChart').getContext('2d');
-        const eco2Ctx = document.getElementById('eco2Chart').getContext('2d');
-        
-        const chartOptions = {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                x: { grid: { color: '#333' }, ticks: { color: '#888' } },
-                y: { grid: { color: '#333' }, ticks: { color: '#888' }, beginAtZero: true }
-            },
-            plugins: { legend: { labels: { color: '#888' } } }
-        };
-        
-        const tvocChart = new Chart(tvocCtx, {
-            type: 'line',
-            data: {
-                labels: [],
-                datasets: [
-                    { label: 'Chamber TVOC (ppb)', data: [], borderColor: '#ff6b6b', tension: 0.3, fill: false },
-                    { label: 'Room TVOC (ppb)', data: [], borderColor: '#4ecdc4', tension: 0.3, fill: false }
-                ]
-            },
-            options: { ...chartOptions, plugins: { ...chartOptions.plugins, title: { display: true, text: 'TVOC History (30 min)', color: '#888' } } }
-        });
-        
-        const eco2Chart = new Chart(eco2Ctx, {
-            type: 'line',
-            data: {
-                labels: [],
-                datasets: [
-                    { label: 'Chamber eCO2 (ppm)', data: [], borderColor: '#ff6b6b', tension: 0.3, fill: false },
-                    { label: 'Room eCO2 (ppm)', data: [], borderColor: '#4ecdc4', tension: 0.3, fill: false }
-                ]
-            },
-            options: { ...chartOptions, plugins: { ...chartOptions.plugins, title: { display: true, text: 'eCO2 History (30 min)', color: '#888' } } }
-        });
-        
-        async function fetchCurrent() {
-            try {
-                const res = await fetch('/api/current');
-                const d = await res.json();
-                document.getElementById('ch-tvoc').textContent = d.ch_tvoc;
-                document.getElementById('ch-eco2').textContent = d.ch_eco2;
-                document.getElementById('ch-temp').textContent = d.ch_temp;
-                document.getElementById('ch-rh').textContent = d.ch_rh;
-                document.getElementById('rm-tvoc').textContent = d.rm_tvoc;
-                document.getElementById('rm-eco2').textContent = d.rm_eco2;
-                document.getElementById('rm-temp').textContent = d.rm_temp;
-                document.getElementById('rm-rh').textContent = d.rm_rh;
-                document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
-            } catch (e) { console.error('Fetch error:', e); }
-        }
-        
-        async function fetchHistory() {
-            try {
-                const res = await fetch('/api/data');
-                const data = await res.json();
-                const labels = data.map((_, i) => `-${data.length - i}m`);
-                tvocChart.data.labels = labels;
-                tvocChart.data.datasets[0].data = data.map(d => d.ch_tvoc);
-                tvocChart.data.datasets[1].data = data.map(d => d.rm_tvoc);
-                tvocChart.update();
-                eco2Chart.data.labels = labels;
-                eco2Chart.data.datasets[0].data = data.map(d => d.ch_eco2);
-                eco2Chart.data.datasets[1].data = data.map(d => d.rm_eco2);
-                eco2Chart.update();
-            } catch (e) { console.error('Fetch error:', e); }
-        }
-        
-        fetchCurrent();
-        fetchHistory();
-        setInterval(fetchCurrent, 5000);
-        setInterval(fetchHistory, 30000);
-    </script>
-</body>
-</html>
-)rawliteral";
 
 void setupWebServer() {
     // Serve main HTML page
@@ -267,58 +140,70 @@ void setupWebServer() {
         request->send_P(200, "text/html", INDEX_HTML);
     });
     
-    // API: Current readings (including running average)
+    // API: Current readings - streamed response
     server.on("/api/current", HTTP_GET, [](AsyncWebServerRequest *request) {
-        StaticJsonDocument<256> doc;
-        // Use running average if we have samples, otherwise use last reading
-        if (sampleCount > 0) {
-            doc["ch_tvoc"] = (int)avgChamberTVOC;
-            doc["ch_eco2"] = (int)avgChamberECO2;
-            doc["ch_temp"] = (int)avgChamberTemp;
-            doc["ch_rh"] = (int)avgChamberRH;
-            doc["rm_tvoc"] = (int)avgRoomTVOC;
-            doc["rm_eco2"] = (int)avgRoomECO2;
-            doc["rm_temp"] = (int)avgRoomTemp;
-            doc["rm_rh"] = (int)avgRoomRH;
-        } else {
-            doc["ch_tvoc"] = data.chamberTVOC;
-            doc["ch_eco2"] = data.chamberECO2;
-            doc["ch_temp"] = data.chamberTemp;
-            doc["ch_rh"] = data.chamberHumidity;
-            doc["rm_tvoc"] = data.roomTVOC;
-            doc["rm_eco2"] = data.roomECO2;
-            doc["rm_temp"] = data.roomTemp;
-            doc["rm_rh"] = data.roomHumidity;
-        }
-        doc["samples"] = sampleCount;
+        AsyncResponseStream *response = request->beginResponseStream("application/json");
         
-        String json;
-        serializeJson(doc, json);
-        request->send(200, "application/json", json);
+        // Helper to write value or status string
+        auto writeVal = [response](const char* key, int val, bool valid, bool isFirst = false) {
+            if (!isFirst) response->print(",");
+            response->printf("\"%s\":", key);
+            if (!valid) {
+                response->print("\"Error\"");
+            } else if (val < 0) {
+                response->print("\"N/A\"");
+            } else {
+                response->print(val);
+            }
+        };
+        
+        response->print("{");
+        
+        // Chamber values
+        int chTvoc = sampleCount > 0 ? (int)avgChamberTVOC : data.chamberTVOC;
+        int chEco2 = sampleCount > 0 ? (int)avgChamberECO2 : data.chamberECO2;
+        int chTemp = sampleCount > 0 ? (int)avgChamberTemp : data.chamberTemp;
+        int chRh = sampleCount > 0 ? (int)avgChamberRH : data.chamberHumidity;
+        
+        writeVal("ch_tvoc", chTvoc, data.chamberValid, true);
+        writeVal("ch_eco2", chEco2, data.chamberValid);
+        writeVal("ch_temp", chTemp, data.chamberValid);
+        writeVal("ch_rh", chRh, data.chamberValid);
+        
+        // Room values
+        int rmTvoc = sampleCount > 0 ? (int)avgRoomTVOC : data.roomTVOC;
+        int rmEco2 = sampleCount > 0 ? (int)avgRoomECO2 : data.roomECO2;
+        int rmTemp = sampleCount > 0 ? (int)avgRoomTemp : data.roomTemp;
+        int rmRh = sampleCount > 0 ? (int)avgRoomRH : data.roomHumidity;
+        
+        writeVal("rm_tvoc", rmTvoc, data.roomValid);
+        writeVal("rm_eco2", rmEco2, data.roomValid);
+        writeVal("rm_temp", rmTemp, data.roomValid);
+        writeVal("rm_rh", rmRh, data.roomValid);
+        
+        response->printf(",\"samples\":%d}", sampleCount);
+        request->send(response);
     });
     
-    // API: Historical data (30 points)
+    // API: Historical data - streamed response
     server.on("/api/data", HTTP_GET, [](AsyncWebServerRequest *request) {
-        StaticJsonDocument<2048> doc;
-        JsonArray arr = doc.to<JsonArray>();
+        AsyncResponseStream *response = request->beginResponseStream("application/json");
         
-        // Output oldest to newest
+        response->print("[");
         for (int i = 0; i < historyCount; i++) {
             int idx = (historyHead - historyCount + i + HISTORY_SIZE) % HISTORY_SIZE;
-            JsonObject point = arr.createNestedObject();
-            point["ch_tvoc"] = history[idx].chamberTVOC;
-            point["ch_eco2"] = history[idx].chamberECO2;
-            point["ch_temp"] = history[idx].chamberTemp;
-            point["ch_rh"] = history[idx].chamberRH;
-            point["rm_tvoc"] = history[idx].roomTVOC;
-            point["rm_eco2"] = history[idx].roomECO2;
-            point["rm_temp"] = history[idx].roomTemp;
-            point["rm_rh"] = history[idx].roomRH;
+            if (i > 0) response->print(",");
+            response->printf(
+                "{\"ch_tvoc\":%u,\"ch_eco2\":%u,\"ch_temp\":%d,\"ch_rh\":%u,"
+                "\"rm_tvoc\":%u,\"rm_eco2\":%u,\"rm_temp\":%d,\"rm_rh\":%u}",
+                history[idx].chamberTVOC, history[idx].chamberECO2,
+                history[idx].chamberTemp, history[idx].chamberRH,
+                history[idx].roomTVOC, history[idx].roomECO2,
+                history[idx].roomTemp, history[idx].roomRH
+            );
         }
-        
-        String json;
-        serializeJson(doc, json);
-        request->send(200, "application/json", json);
+        response->print("]");
+        request->send(response);
     });
     
     server.begin();
@@ -330,22 +215,28 @@ void connectWiFi() {
     WiFi.persistent(true);
     
     Serial.printf("Connecting to WiFi: %s\n", SSID);
+    drawBootScreen("Connecting to WiFi...", 0);
     WiFi.begin(SSID, PASSWD);
     
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 20) {
         delay(500);
         Serial.print(".");
+        drawBootScreen("Connecting to WiFi...", attempts + 1);
         attempts++;
     }
     
     if (WiFi.status() == WL_CONNECTED) {
         wifiConnected = true;
         Serial.printf("\nWiFi connected! IP: %s\n", WiFi.localIP().toString().c_str());
+        drawBootScreen("WiFi connected!", 0);
+        delay(500);
         setupWebServer();
     } else {
         wifiConnected = false;
         Serial.println("\nWiFi connection failed! Will retry automatically.");
+        drawBootScreen("WiFi failed, continuing...", 0);
+        delay(1000);
     }
 }
 #endif
@@ -528,6 +419,32 @@ void drawMainScreen() {
     #endif
 }
 
+// =============================================================================
+// Boot Screen (shown during initialization)
+// =============================================================================
+void drawBootScreen(const char* status, uint8_t progress) {
+    u8g2.clearBuffer();
+    
+    // Title - use slightly larger font for "VOC Monitor"
+    u8g2.setFont(u8g2_font_6x12_tf);
+    u8g2.drawStr(28, 20, "VOC Monitor");
+    
+    // Status message
+    u8g2.setFont(u8g2_font_5x8_tf);
+    u8g2.drawStr(4, 38, status);
+    
+    // Progress dots (up to 10 dots)
+    if (progress > 0) {
+        char dots[12];
+        uint8_t numDots = progress > 10 ? 10 : progress;
+        for (uint8_t i = 0; i < numDots; i++) dots[i] = '.';
+        dots[numDots] = '\0';
+        u8g2.drawStr(4, 50, dots);
+    }
+    
+    u8g2.sendBuffer();
+}
+
 void drawStatusScreen() {
     u8g2.setFont(u8g2_font_5x8_tf);
     
@@ -586,7 +503,7 @@ void updateDisplay() {
 void setup() {
     Serial.begin(115200);
     delay(500);
-    Serial.println("\n=== VoC Monitor (ESP8266) ===\n");
+    Serial.println("\n=== VOC Monitor (ESP8266) ===\n");
     
     // Button
     pinMode(BUTTON_PIN, INPUT_PULLUP);
@@ -601,8 +518,12 @@ void setup() {
     u8g2.begin();
     u8g2.setPowerSave(0);
     
+    // Show boot screen
+    drawBootScreen("Initializing...", 0);
+    
     // Chamber sensors (I2C1)
     Serial.println("Initializing Chamber sensors...");
+    drawBootScreen("Init chamber sensors...", 1);
     Wire.begin(I2C1_SDA, I2C1_SCL);
     delay(100);
     
@@ -622,6 +543,7 @@ void setup() {
     
     // Room sensors (I2C2)
     Serial.println("Initializing Room sensors...");
+    drawBootScreen("Init room sensors...", 2);
     Wire.begin(I2C2_SDA, I2C2_SCL);
     delay(100);
     
@@ -645,7 +567,8 @@ void setup() {
     #endif
     
     // Initial read
-    delay(1000);
+    drawBootScreen("Starting...", 0);
+    delay(500);
     readSensors();
     updateDisplay();
     

@@ -1,7 +1,7 @@
 $fn=360;
 width=180;
 height=100;
-depth=25;
+depth=15;
 lcd_width=80;
 lcd_height=52;
 lcd_depth=9;
@@ -17,29 +17,37 @@ module cover() {
                 translate([3,3,-depth-lcd_depth])cube([width-6, height-6, depth+lcd_depth]);        
             }
             cube([width, height, 3]);
-            translate([13+lcd_width/2, 31+lcd_height/2, -lcd_depth+3]) linear_extrude(height=lcd_depth, scale=1.3) square([lcd_width, lcd_height], center=true); // LCD
-            translate([106-1, 24-1, -lcd_depth])color("blue") cube([btn_width+2, btn_width+2, lcd_depth]); // Button
+            translate([14+lcd_width/2, 31+lcd_height/2, -lcd_depth+3]) linear_extrude(height=lcd_depth, scale=1.3) square([lcd_width, lcd_height], center=true); // LCD
+            translate([107-1, 24-1, -lcd_depth])color("blue") cube([btn_width+2, btn_width+2, lcd_depth]); // Button
             // fix holes
-            translate([3,3,-depth-lcd_depth])cube([5,5,depth+lcd_depth]);
-            translate([width-3-5,3,-depth-lcd_depth])cube([5,5,depth+lcd_depth]);
-            translate([3,height-3-5,-depth-lcd_depth])cube([5,5,depth+lcd_depth]);
-            translate([width-3-5,height-3-5,-depth-lcd_depth])cube([5,5,depth+lcd_depth]); 
+            translate([3,3,-depth-lcd_depth])cube([4,4,depth+lcd_depth]);
+            translate([width-3-4,3,-depth-lcd_depth])cube([4,4,depth+lcd_depth]);
+            translate([3,height-3-4,-depth-lcd_depth])cube([4,4,depth+lcd_depth]);
+            translate([width-3-4,height-3-4,-depth-lcd_depth])cube([4,4,depth+lcd_depth]); 
         }
-        //translate([13, 31, -1])color("blue") cube([lcd_width, lcd_height, 6]); // LCD position helper
-        translate([13+lcd_width/2, 31+lcd_height/2, -lcd_depth+3])color("blue")linear_extrude(height=lcd_depth, scale=1.3) square([lcd_width-3, lcd_height-3], center=true); // LCD
-        translate([106, 24, -lcd_depth-3])color("blue") cube([btn_width, btn_width, 20]); // Button
+        translate([14+lcd_width/2, 31+lcd_height/2, -lcd_depth+3])color("blue")linear_extrude(height=lcd_depth, scale=1.3) square([lcd_width-3, lcd_height-3], center=true); // LCD
+        translate([107, 24, -lcd_depth-3])color("blue") cube([btn_width, btn_width, 20]); // Button
         
-        translate([175, 43, -3-lcd_depth-9])color("blue") cube([6, 12, 6]); // USB
+        translate([175, 48, -3-lcd_depth-1])color("blue") cube([6, 14, 6]); // USB
         translate([110, 80, 2.5]) linear_extrude(height = 2) color("green") text(text = "Pip-Boy 3000 Mk V", font = "Helvetica Neue:style=Condensed Bold", size = 6);
-        translate([10, 10, 2.5]) linear_extrude(height = 2) color("green") text(text = "Vault-Tec Approved Air™ — Now with 12% less mystery!", font = "Helvetica Neue:style=Condensed Bold", size = 5);
-        translate([140, 55, 4]) trefoil(13,3,1.5,5);
+        translate([12, 10, 2.5]) linear_extrude(height = 2) color("green") text(text = "Vault-Tec Approved Air™ — Now with 12% less mystery!", font = "Helvetica Neue:style=Condensed Bold", size = 5);
+        translate([140, 58, 4]) trefoil(13,3,1.5,5);
         // fix holes
         translate([4,4,-depth-lcd_depth-10]) cylinder(r=1.9, h=40);
         translate([width-4,4,-depth-lcd_depth-10]) cylinder(r=1.9, h=40);
         translate([4,height-4,-depth-lcd_depth-10]) cylinder(r=1.9, h=40);
         translate([width-4,height-4,-depth-lcd_depth-10]) cylinder(r=1.9, h=40);
+        difference() { // round corner
+            translate([width/2, height/2, -depth-lcd_depth]) cylinder(r=sqrt(width*width+height*height)/2, h = 60);
+            translate([width/2, height/2, -depth-lcd_depth]) cylinder(r=sqrt(width*width+height*height)/2-1, h = 60);
+        }
+
     }
+    
+    
 }
+
+
 
 module trefoil(outradius,height,inRatio,outRatio){
 	inradius = outradius/outRatio;
@@ -98,8 +106,8 @@ module leg() {
     translate([-50/2+12/2, 4, 0]) rotate([0, 90, 0]) cylinder(r=4, h=50);
 }
 
-button();
-//cover();
+//button();
+translate([-width-1,-40,depth+lcd_depth]) cover();
 //back();
 //leg();
  

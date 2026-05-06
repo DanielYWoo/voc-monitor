@@ -1,4 +1,4 @@
-# VoC Monitor System Design Document
+# VOC Monitor System Design Document
 
 ## 1. Overview
 
@@ -68,11 +68,244 @@ This document provides the detailed technical design for an industrial-grade env
 
 ---
 
-## 2. Hardware Design
+## 2. User Interface Design
 
-### 2.1 Component Selection
+### 2.1 Display Hardware
 
-#### 2.1.1 ESP8266 Selection Criteria
+- **Display**: ST7920 128x64 LCD (monochrome)
+- **Library**: U8g2
+- **Font**: `u8g2_font_5x8_tf` (5×8 pixels, 25 chars per line, 8 lines)
+- **Interface**: Software SPI
+
+### 2.2 Boot Screen
+
+During startup, a boot screen is displayed showing initialization progress. This provides visual feedback during the slow WiFi connection process.
+
+```
+┌───────────────────────────────┐
+│                               │
+│        VOC Monitor            │  Title (6x12 font)
+│                               │
+│   Connecting to WiFi...       │  Status message (5x8 font)
+│   ..........                  │  Progress dots (up to 10)
+│                               │
+└───────────────────────────────┘
+        128 × 64 pixels
+```
+
+**Boot Sequence:**
+1. "Initializing..." - LCD ready
+2. "Init chamber sensors..." - Chamber I2C bus
+3. "Init room sensors..." - Room I2C bus
+4. "Connecting to WiFi..." - WiFi connection (with progress dots)
+5. "WiFi connected!" or "WiFi failed, continuing..."
+6. "Starting..." - Final initialization
+
+### 2.3 Screen States (3 Cycles)
+
+The display cycles through 3 states when the button is pressed:
+
+1. **SCREEN_MAIN** - Main sensor data (Chamber & Room in two columns), backlight ON
+2. **SCREEN_STATUS** - WiFi and system status, backlight ON
+3. **SCREEN_MAIN_DARK** - Main sensor data, backlight OFF (power saving)
+
+#### Page 1: Main Screen (SCREEN_MAIN)
+
+Two-column layout with table borders showing Chamber and Room sensor data side by side.
+
+```
+┌───────────────┬───────────────┐
+│   CHAMBER     │     ROOM      │  Header row
+├───────────────┼───────────────┤
+│TVOC:    150ppb│TVOC:     50ppb│  TVOC values (right-aligned)
+│eCO2:    800ppm│eCO2:    450ppm│  eCO2 values (right-aligned)
+│T:35C RH:30%   │T:25C RH:50%   │  Temp & humidity
+├───────────────┴───────────────┤
+│WiFi: Connected                │  WiFi status
+│IP: 192.168.1.100              │  IP address
+└───────────────────────────────┘
+        128 × 64 pixels (5x8 font)
+```
+
+#### Page 2: Status Screen (SCREEN_STATUS)
+
+Shows WiFi and system status details.
+
+```
+┌───────────────────────────────┐
+│           STATUS              │  Header
+├───────────────────────────────┤
+│WiFi: Connected                │  WiFi status
+│IP: 192.168.1.100              │  IP address
+│Web Dashboard: ON              │  Web server status
+│History: 15/30 pts             │  Data buffer status
+│Avg samples: 45/60             │  Current averaging progress
+└───────────────────────────────┘
+        128 × 64 pixels (5x8 font)
+```
+
+### 2.3 Screen State Machine
+
+```
+┌─────────────────┐
+│   MAIN SCREEN   │◄─────────────────────────────────┐
+│  (Backlight ON) │                                   │
+│                 │                                   │
+│ • Chamber TVOC  │                                   │
+│ • Chamber eCO2  │                                   │
+│ • Chamber T/RH  │                                   │
+│ • Room TVOC     │                                   │
+│ • Room eCO2     │                                   │
+│ • Room T/RH     │                                   │
+│ • WiFi status   │                                   │
+└────────┬────────┘                                   │
+         │ Button Press                               │
+         ▼                                            │
+┌─────────────────┐                                   │
+│  STATUS SCREEN  │                                   │
+│  (Backlight ON) │                                   │
+│                 │                                   │
+│ • WiFi status   │                                   │
+│ • IP address    │                                   │
+│ • Web Dashboard │                                   │
+│ • History pts   │                                   │
+│ • Avg samples   │                                   │
+└────────┬────────┘                                   │
+         │ Button Press                               │
+         ▼                                            │
+┌─────────────────┐                                   │
+│   MAIN SCREEN   │                                   │
+│ (Backlight OFF) │                                   │
+│                 │                                   │
+│  Same as above  │                                   │
+│  but backlight  │                                   │
+│  is turned off  │                                   │
+│  for power      │                                   │
+│  saving         │                                   │
+└────────┬────────┘                                   │
+         │ Button Press                               │
+         └────────────────────────────────────────────┘
+```
+
+---
+
+## 3. Software Design
+
+### 3.1 Software Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                       ESP8266 SOFTWARE ARCHITECTURE                     │
+│                                                                         │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                      APPLICATION LAYER                            │  │
+│  │                                                                   │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐    │  │
+│  │  │   Display   │  │   Config    │  │   WiFi Client           │    │  │
+│  │  │   Manager   │  │   Manager   │  │   (Optional)            │    │  │
+│  │  └─────────────┘  └─────────────┘  └─────────────────────────┘    │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                        DRIVER LAYER                               │  │
+│  │                                                                   │  │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────────────┐                 │  │
+│  │  │ ENS160   │  │  AHT20   │  │    U8g2 LCD      │                 │  │
+│  │  │ Driver   │  │  Driver  │  │    Display       │                 │  │
+│  │  └──────────┘  └──────────┘  └──────────────────┘                 │  │
+│  │                                                                   │  │
+│  │  ┌──────────────────────────────────────────────────────────────┐ │  │
+│  │  │                     Button Handler                           │ │  │
+│  │  └──────────────────────────────────────────────────────────────┘ │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                    HAL / PLATFORM LAYER                           │  │
+│  │                                                                   │  │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐                         │  │
+│  │  │   I2C    │  │   SPI    │  │  GPIO    │                         │  │
+│  │  └──────────┘  └──────────┘  └──────────┘                         │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 3.2 Main Program Flow
+
+```
+┌─────────────────┐
+│     START       │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  Initialize     │
+│  - I2C Buses    │
+│  - SPI (LCD)    │
+│  - WiFi (opt)   │
+│  - Sensors      │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────┐
+│                    MAIN LOOP                         │
+│                                                      │
+│  ┌─────────────┐                                    │
+│  │ Read Sensors│◄─────────────────────────────┐     │
+│  │ (1 second)  │                              │     │
+│  └──────┬──────┘                              │     │
+│         │                                     │     │
+│         ▼                                     │     │
+│  ┌─────────────┐                              │     │
+│  │ Update      │                              │     │
+│  │ Display     │                              │     │
+│  └──────┬──────┘                              │     │
+│         │                                     │     │
+│         ▼                                     │     │
+│  ┌─────────────┐                              │     │
+│  │ Handle      │                              │     │
+│  │ Button      │                              │     │
+│  └──────┬──────┘                              │     │
+│         │                                     │     │
+│         └─────────────────────────────────────┘     │
+│                                                      │
+└──────────────────────────────────────────────────────┘
+```
+
+### 3.3 Project File Structure
+
+```
+voc-monitor/
+├── platformio.ini              # PlatformIO configuration
+├── include/
+│   ├── config.h                # Pin definitions, constants
+│   ├── credentials.h           # WiFi credentials (gitignored)
+│   └── web_content.h           # HTML page for web dashboard
+├── src/
+│   └── main.cpp                # Main application
+└── test/
+```
+
+### 3.4 Sensor Calibration Requirements
+
+| Sensor | User Calibration | Frequency | Method |
+|--------|------------------|-----------|--------|
+| **ENS160** | ⚠️ Auto | Every power-on | Self-calibrates over ~1 hour, no user action |
+| **AHT20** | ❌ Not needed | N/A | Factory calibrated, ±0.3°C / ±2% RH accuracy |
+
+**ENS160 Auto-Calibration:**
+- Uses built-in baseline algorithm
+- Takes ~1 hour after power-on to stabilize
+- Learns environment over 24 hours for best accuracy
+- No user intervention required
+
+---
+
+## 4. Hardware Design
+
+### 4.1 Component Selection
+
+#### 4.1.1 ESP8266 Selection Criteria
 
 | Requirement | ESP8266 Capability | Notes |
 |-------------|-------------------|-------|
@@ -85,7 +318,7 @@ This document provides the detailed technical design for an industrial-grade env
 
 **Recommended Board**: NodeMCU v3 (ESP-12E) or Wemos D1 Mini
 
-### 2.2 Sensor Configuration
+### 4.2 Sensor Configuration
 
 | Sensor | Location | Interface | I2C Address | Measurements |
 |--------|----------|-----------|-------------|--------------|
@@ -94,7 +327,7 @@ This document provides the detailed technical design for an industrial-grade env
 
 **Note**: Since both AHT20 sensors have the same fixed I2C address (0x38), we use two separate I2C buses - one hardware and one software-emulated.
 
-### 2.3 Memory Considerations
+### 4.3 Memory Considerations
 
 **ESP8266 Memory Budget:**
 - Total SRAM: 80 KB
@@ -105,7 +338,7 @@ This document provides the detailed technical design for an industrial-grade env
 
 Using 128x64 LCD instead of color TFT saves significant memory.
 
-### 2.4 ESP8266 Pin Assignment
+### 4.4 ESP8266 Pin Assignment
 
 #### Pin Assignment Table
 
@@ -131,7 +364,7 @@ Using 128x64 LCD instead of color TFT saves significant memory.
 
 **Note:** GPIO 3 (RX) is used for backlight control. Serial TX still works for debug output, but serial input is disabled.
 
-### 2.5 NodeMCU Pinout Diagram
+### 4.5 NodeMCU Pinout Diagram
 
 ```
     NodeMCU v3 (ESP-12E)
@@ -157,7 +390,11 @@ Using 128x64 LCD instead of color TFT saves significant memory.
     └─────────────────────────────────────────┘
 ```
 
-### 2.6 ST7920 LCD Pinout (12864 Display)
+---
+
+## 5. Wiring & Schematics
+
+### 5.1 ST7920 LCD Pinout (12864 Display)
 
 The ST7920 is a common 128x64 LCD controller. We use **serial mode** to minimize GPIO usage.
 
@@ -194,9 +431,7 @@ The ST7920 is a common 128x64 LCD controller. We use **serial mode** to minimize
     └─────────┴────────────────────────────────────────────────────────┘
 ```
 
-### 2.7 Circuit Schematics
-
-#### 2.7.1 ST7920 LCD Wiring
+### 5.2 ST7920 LCD Wiring
 
 ```
     ST7920 LCD Module               NodeMCU
@@ -216,7 +451,7 @@ The ST7920 is a common 128x64 LCD controller. We use **serial mode** to minimize
     └─────────────┘                └─────┘
 ```
 
-#### 2.7.2 I2C Bus Connections
+### 5.3 I2C Bus Connections
 
 ```
     I2C BUS 1 - Hardware (Chamber)         I2C BUS 2 - Software (Room)
@@ -236,7 +471,7 @@ The ST7920 is a common 128x64 LCD controller. We use **serial mode** to minimize
     ESP8266 has 1 hardware I2C, so we use software I2C for the second bus.
 ```
 
-#### 2.7.3 Button Wiring
+### 5.4 Button Wiring
 
 ```
     Button Wiring (using GPIO 0 / D3)
@@ -265,147 +500,37 @@ The ST7920 is a common 128x64 LCD controller. We use **serial mode** to minimize
 
 ---
 
-## 3. Display Design
+## 6. Web Dashboard
 
-### 3.1 Display Hardware
+### 6.1 Overview
 
-- **Display**: ST7920 128x64 LCD (monochrome)
-- **Library**: U8g2
-- **Font**: `u8g2_font_5x8_tf` (5×8 pixels, 25 chars per line, 8 lines)
-- **Interface**: Software SPI
+The VOC Monitor includes a built-in web dashboard accessible via WiFi. The ESP8266 serves a responsive HTML page with real-time charts using Chart.js.
 
-### 3.2 Screen States (3 Cycles)
-
-The display cycles through 3 states when the button is pressed:
-
-1. **SCREEN_MAIN** - Main sensor data (Chamber & Room in two columns), backlight ON
-2. **SCREEN_STATUS** - WiFi and Klipper push status, backlight ON
-3. **SCREEN_MAIN_DARK** - Main sensor data, backlight OFF (power saving)
-
-#### Page 1: Main Screen (SCREEN_MAIN)
-
-Two-column layout with table borders showing Chamber and Room sensor data side by side.
-
-```
-┌───────────────┬───────────────┐
-│   CHAMBER     │     ROOM      │  Header row
-├───────────────┼───────────────┤
-│TVOC:    150ppb│TVOC:     50ppb│  TVOC values (right-aligned)
-│eCO2:    800ppm│eCO2:    450ppm│  eCO2 values (right-aligned)
-│T:35C RH:30%   │T:25C RH:50%   │  Temp & humidity
-├───────────────┴───────────────┤
-│WiFi: Connected                │  WiFi status
-│IP: 192.168.1.100              │  IP address
-└───────────────────────────────┘
-        128 × 64 pixels (5x8 font)
-```
-
-#### Page 2: Status Screen (SCREEN_STATUS)
-
-Shows WiFi and Klipper push status details.
-
-```
-┌───────────────────────────────┐
-│           STATUS              │  Header
-├───────────────────────────────┤
-│WiFi: Connected                │  WiFi status
-│IP: 192.168.1.100              │  IP address
-│Klipper Push: ON               │  Push enabled flag
-│Host: 192.168.1.50:7125        │  Klipper endpoint
-│Last Push: OK                  │  Last push result
-└───────────────────────────────┘
-        128 × 64 pixels (5x8 font)
-```
-
-### 3.3 Screen State Machine
-
-```
-┌─────────────────┐
-│   MAIN SCREEN   │◄─────────────────────────────────┐
-│  (Backlight ON) │                                   │
-│                 │                                   │
-│ • Chamber TVOC  │                                   │
-│ • Chamber eCO2  │                                   │
-│ • Chamber T/RH  │                                   │
-│ • Room TVOC     │                                   │
-│ • Room eCO2     │                                   │
-│ • Room T/RH     │                                   │
-│ • WiFi status   │                                   │
-└────────┬────────┘                                   │
-         │ Button Press                               │
-         ▼                                            │
-┌─────────────────┐                                   │
-│  STATUS SCREEN  │                                   │
-│  (Backlight ON) │                                   │
-│                 │                                   │
-│ • WiFi status   │                                   │
-│ • IP address    │                                   │
-│ • Klipper Push  │                                   │
-│ • Klipper Host  │                                   │
-│ • Last push     │                                   │
-└────────┬────────┘                                   │
-         │ Button Press                               │
-         ▼                                            │
-┌─────────────────┐                                   │
-│   MAIN SCREEN   │                                   │
-│ (Backlight OFF) │                                   │
-│                 │                                   │
-│  Same as above  │                                   │
-│  but backlight  │                                   │
-│  is turned off  │                                   │
-│  for power      │                                   │
-│  saving         │                                   │
-└────────┬────────┘                                   │
-         │ Button Press                               │
-         └────────────────────────────────────────────┘
-```
-
-### 3.4 Sensor Calibration Requirements
-
-| Sensor | User Calibration | Frequency | Method |
-|--------|------------------|-----------|--------|
-| **ENS160** | ⚠️ Auto | Every power-on | Self-calibrates over ~1 hour, no user action |
-| **AHT20** | ❌ Not needed | N/A | Factory calibrated, ±0.3°C / ±2% RH accuracy |
-
-**ENS160 Auto-Calibration:**
-- Uses built-in baseline algorithm
-- Takes ~1 hour after power-on to stabilize
-- Learns environment over 24 hours for best accuracy
-- No user intervention required
-
----
-
-## 4. Web Dashboard
-
-### 4.1 Overview
-
-The VoC Monitor includes a built-in web dashboard accessible via WiFi. The ESP8266 serves a responsive HTML page with real-time charts using Chart.js.
-
-### 4.2 Architecture
+### 6.2 Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         WEB DASHBOARD ARCHITECTURE                       │
-│                                                                          │
+│                         WEB DASHBOARD ARCHITECTURE                      │
+│                                                                         │
 │   ┌─────────────────┐                      ┌─────────────────────────┐  │
 │   │   ESP8266       │                      │   Browser (Client)      │  │
 │   │                 │                      │                         │  │
-│   │  ┌───────────┐  │    HTTP Request      │  ┌─────────────────┐   │  │
+│   │  ┌───────────┐  │    HTTP Request      │  ┌──────────────────┐   │  │
 │   │  │ Async     │◄─┼──────────────────────┼──│ fetch('/api/...')│   │  │
-│   │  │ WebServer │  │                      │  └─────────────────┘   │  │
-│   │  └─────┬─────┘  │    JSON Response     │           │            │  │
-│   │        │        │──────────────────────┼──►        ▼            │  │
-│   │        ▼        │                      │  ┌─────────────────┐   │  │
-│   │  ┌───────────┐  │                      │  │   Chart.js      │   │  │
-│   │  │ History   │  │                      │  │   (CDN loaded)  │   │  │
-│   │  │ Buffer    │  │                      │  └─────────────────┘   │  │
+│   │  │ WebServer │  │                      │  └──────────────────┘   │  │
+│   │  └─────┬─────┘  │    JSON Response     │           │             │  │
+│   │        │        │──────────────────────┼──►        ▼             │  │
+│   │        ▼        │                      │  ┌──────────────────┐   │  │
+│   │  ┌───────────┐  │                      │  │   Chart.js       │   │  │
+│   │  │ History   │  │                      │  │   (CDN loaded)   │   │  │
+│   │  │ Buffer    │  │                      │  └──────────────────┘   │  │
 │   │  │ (30 pts)  │  │                      │                         │  │
 │   │  └───────────┘  │                      │                         │  │
 │   └─────────────────┘                      └─────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 4.3 Data Flow
+### 6.3 Data Flow
 
 ```
 Sensor Reading (1 Hz)
@@ -431,17 +556,36 @@ Sensor Reading (1 Hz)
 └───────────────────┘
 ```
 
-### 4.4 Memory Usage
+### 6.4 Memory Usage
 
 | Component | Size | Notes |
 |-----------|------|-------|
 | Running average | 65 bytes | 8 × double (64 bytes) + counter (1 byte) |
 | History buffer | 480 bytes | 30 × 16 bytes per point |
-| HTML page | ~4 KB | Stored in PROGMEM (flash) |
-| JSON buffer | ~2 KB | StaticJsonDocument for API responses |
-| **Total RAM** | ~550 bytes | Plus temporary JSON buffers |
+| HTML page | ~2.5 KB | Stored in PROGMEM (flash), minified |
+| **Total RAM** | ~550 bytes | Plus temporary stream buffers |
 
-### 4.5 API Endpoints
+### 6.5 ESPAsyncWebServer
+
+The web server uses `ESPAsyncWebServer` library for non-blocking operation:
+
+- **Non-blocking**: Requests are handled via callbacks, not blocking the main loop
+- **Efficient**: Uses LWIP async TCP callbacks and streams bytes instead of building full strings
+- **Cooperative**: Requires `delay()` or `yield()` in loop for WiFi stack processing
+
+```cpp
+// No handleClient() needed in loop
+void loop() {
+    // ... sensor reading, display update ...
+    delay(50);  // Yields to WiFi stack and async callbacks
+}
+```
+
+---
+
+## 7. API Reference
+
+### 7.1 Endpoints
 
 | Endpoint | Method | Response | Description |
 |----------|--------|----------|-------------|
@@ -449,7 +593,10 @@ Sensor Reading (1 Hz)
 | `/api/current` | GET | JSON | Current running average values |
 | `/api/data` | GET | JSON | Historical data (30 points) |
 
-**Example `/api/current` response:**
+### 7.2 `/api/current` Response
+
+Returns current sensor values. If sensor is disconnected, returns `"Error"`. If no data yet, returns `"N/A"`.
+
 ```json
 {
   "ch_tvoc": 150,
@@ -464,7 +611,10 @@ Sensor Reading (1 Hz)
 }
 ```
 
-**Example `/api/data` response:**
+### 7.3 `/api/data` Response
+
+Returns historical data array (oldest to newest, up to 30 points):
+
 ```json
 [
   {"ch_tvoc": 148, "ch_eco2": 448, "ch_temp": 27, "ch_rh": 54, "rm_tvoc": 78, "rm_eco2": 418, "rm_temp": 24, "rm_rh": 50},
@@ -473,138 +623,18 @@ Sensor Reading (1 Hz)
 ]
 ```
 
-### 4.6 Client Refresh Rates
+### 7.4 Client Refresh Rates
 
 | Data | Refresh Interval | Reason |
 |------|------------------|--------|
 | Current values | 5 seconds | Near real-time display |
 | History chart | 30 seconds | Data only changes every 60 seconds |
 
-### 4.7 ESPAsyncWebServer
-
-The web server uses `ESPAsyncWebServer` library for non-blocking operation:
-
-- **Non-blocking**: Requests are handled via callbacks, not blocking the main loop
-- **Efficient**: Uses LWIP async TCP callbacks
-- **Cooperative**: Requires `delay()` or `yield()` in loop for WiFi stack processing
-
-```cpp
-// No handleClient() needed in loop
-void loop() {
-    // ... sensor reading, display update ...
-    delay(50);  // Yields to WiFi stack and async callbacks
-}
-```
-
 ---
 
-## 5. Software Design
+## 8. Development Environment
 
-### 5.1 Software Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                       ESP8266 SOFTWARE ARCHITECTURE                      │
-│                                                                          │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │                      APPLICATION LAYER                             │  │
-│  │                                                                    │  │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐    │  │
-│  │  │   Display   │  │   Config    │  │   WiFi Client           │    │  │
-│  │  │   Manager   │  │   Manager   │  │   (Optional)            │    │  │
-│  │  └─────────────┘  └─────────────┘  └─────────────────────────┘    │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
-│                                                                          │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │                        DRIVER LAYER                                │  │
-│  │                                                                    │  │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────────────┐                 │  │
-│  │  │ ENS160   │  │  AHT20   │  │    U8g2 LCD      │                 │  │
-│  │  │ Driver   │  │  Driver  │  │    Display       │                 │  │
-│  │  └──────────┘  └──────────┘  └──────────────────┘                 │  │
-│  │                                                                    │  │
-│  │  ┌──────────────────────────────────────────────────────────────┐ │  │
-│  │  │                     Button Handler                            │ │  │
-│  │  └──────────────────────────────────────────────────────────────┘ │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
-│                                                                          │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │                    HAL / PLATFORM LAYER                            │  │
-│  │                                                                    │  │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐                         │  │
-│  │  │   I2C    │  │   SPI    │  │  GPIO    │                         │  │
-│  │  └──────────┘  └──────────┘  └──────────┘                         │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### 4.2 Project File Structure
-
-```
-voc-monitor/
-├── platformio.ini              # PlatformIO configuration
-├── include/
-│   ├── config.h                # Pin definitions, constants
-│   └── credentials.h           # WiFi credentials (gitignored)
-├── src/
-│   └── main.cpp                # Main application
-└── test/
-```
-
-### 4.3 Main Program Flow
-
-```
-┌─────────────────┐
-│     START       │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  Initialize     │
-│  - I2C Buses    │
-│  - SPI (LCD)    │
-│  - WiFi (opt)   │
-│  - Sensors      │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────┐
-│                    MAIN LOOP                         │
-│                                                      │
-│  ┌─────────────┐                                    │
-│  │ Read Sensors│◄─────────────────────────────┐     │
-│  │ (1 second)  │                              │     │
-│  └──────┬──────┘                              │     │
-│         │                                     │     │
-│         ▼                                     │     │
-│  ┌─────────────┐                              │     │
-│  │ Update      │                              │     │
-│  │ Display     │                              │     │
-│  └──────┬──────┘                              │     │
-│         │                                     │     │
-│         ▼                                     │     │
-│  ┌─────────────┐                              │     │
-│  │ WiFi Upload │                              │     │
-│  │ (if enabled)│                              │     │
-│  └──────┬──────┘                              │     │
-│         │                                     │     │
-│         ▼                                     │     │
-│  ┌─────────────┐                              │     │
-│  │ Handle      │                              │     │
-│  │ Button      │                              │     │
-│  └──────┬──────┘                              │     │
-│         │                                     │     │
-│         └─────────────────────────────────────┘     │
-│                                                      │
-└──────────────────────────────────────────────────────┘
-```
-
----
-
-## 5. Development Environment
-
-### 5.1 PlatformIO Configuration
+### 8.1 PlatformIO Configuration
 
 ```ini
 ; platformio.ini
@@ -621,14 +651,13 @@ lib_deps =
     adafruit/Adafruit AHTX0@^2.0.3
     sparkfun/SparkFun Indoor Air Quality Sensor - ENS160@^1.0.0
     bblanchon/ArduinoJson@^6.21.0
-    me-no-dev/ESPAsyncTCP@^1.2.2
-    https://github.com/me-no-dev/ESPAsyncWebServer.git
+    mathieucarbou/ESPAsyncWebServer@^3.6.0
 
 build_flags = 
     -DCORE_DEBUG_LEVEL=3
 ```
 
-### 5.2 How to Compile
+### 8.2 How to Compile
 
 ```bash
 # Build
@@ -641,7 +670,7 @@ pio run --target upload
 pio device monitor
 ```
 
-### 5.3 Required Libraries
+### 8.3 Required Libraries
 
 | Library | Purpose |
 |---------|---------|
@@ -650,14 +679,13 @@ pio device monitor
 | SparkFun ENS160 | ENS160 sensor |
 | ArduinoJson | JSON serialization for API |
 | ESP8266WiFi | ESP8266 WiFi (built-in) |
-| ESPAsyncWebServer | Non-blocking web server |
-| ESPAsyncTCP | Async TCP for web server |
+| ESPAsyncWebServer | Non-blocking web server (mathieucarbou fork) |
 
 ---
 
-## 6. Bill of Materials
+## 9. Bill of Materials
 
-### 6.1 Required Components
+### 9.1 Required Components
 
 | Component | Model/Spec | Qty | Notes |
 |-----------|------------|-----|-------|
@@ -667,7 +695,7 @@ pio device monitor
 | Button | 6mm Tactile Switch | 1 | Momentary |
 | Power Supply | 5V 1A USB | 1 | |
 
-### 6.2 Wire Count Summary
+### 9.2 Wire Count Summary
 
 | Connection | Wires |
 |------------|-------|
@@ -679,9 +707,9 @@ pio device monitor
 
 ---
 
-## 7. Assembly & Testing
+## 10. Assembly & Testing
 
-### 7.1 Assembly Checklist
+### 10.1 Assembly Checklist
 
 - [ ] Wire I2C Bus 1 (D1/D2) to Chamber ENS160+AHT20
 - [ ] Wire I2C Bus 2 (D5/D6) to Room ENS160+AHT20
@@ -689,20 +717,21 @@ pio device monitor
 - [ ] Wire button between D3 (GPIO 0) and GND
 - [ ] Connect 5V power via USB
 
-### 7.2 Testing Procedure
+### 10.2 Testing Procedure
 
 1. **I2C Scan** - Verify 0x38 and 0x52 on both buses
 2. **LCD Test** - Verify display shows text
 3. **Sensor Test** - Breathe on sensors, verify readings change
 4. **Button Test** - Verify screen cycling
-5. **WiFi Test** - Verify connection and data push
+5. **WiFi Test** - Verify connection and web dashboard
 
 ---
 
-## 8. References
+## 11. References
 
 - [ENS160 Datasheet](https://www.sciosense.com/products/environmental-sensors/ens160-digital-metal-oxide-multi-gas-sensor/)
 - [AHT20 Datasheet](http://www.aosong.com/en/products-32.html)
 - [U8g2 Library](https://github.com/olikraus/u8g2)
 - [ESP8266 Technical Reference](https://www.espressif.com/sites/default/files/documentation/esp8266-technical_reference_en.pdf)
 - [NodeMCU Documentation](https://nodemcu.readthedocs.io/)
+- [ESPAsyncWebServer (mathieucarbou fork)](https://github.com/mathieucarbou/ESPAsyncWebServer)
