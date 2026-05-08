@@ -29,11 +29,15 @@
 // LCD Backlight Control
 #define LCD_BACKLIGHT 3 // D9/RX - Backlight control (HIGH = on, LOW = off)
 
+// Buzzer (Passive buzzer for Geiger counter effect)
+#define BUZZER_PIN    10    // SD3 (GPIO 10) - Passive buzzer
+
 // -----------------------------------------------------------------------------
 // I2C Addresses
 // -----------------------------------------------------------------------------
-#define ENS160_ADDR  0x52   // ENS160 VOC sensor
-#define AHT20_ADDR   0x38   // AHT20 temperature/humidity sensor
+#define ENS160_ADDR      0x52   // ENS160 VOC sensor (default address, ADDR pin LOW)
+#define ENS160_ADDR_ALT  0x53   // ENS160 VOC sensor (alternate address, ADDR pin HIGH)
+#define AHT20_ADDR       0x38   // AHT20 temperature/humidity sensor
 
 // -----------------------------------------------------------------------------
 // Display Settings

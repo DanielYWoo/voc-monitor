@@ -122,24 +122,28 @@ Two-column layout with table borders showing Chamber and Room sensor data side b
 │T:35C RH:30%   │T:25C RH:50%   │  Temp & humidity
 ├───────────────┴───────────────┤
 │WiFi: Connected                │  WiFi status
-│IP: 192.168.1.100              │  IP address
+│Warming: 45m left              │  Sensor warmup status (or "Sensors: Ready")
 └───────────────────────────────┘
         128 × 64 pixels (5x8 font)
 ```
 
+**Sensor Status Display:**
+- If uptime < 60 minutes: `"Warming: XXm left"` (shows minutes remaining)
+- If uptime ≥ 60 minutes: `"Sensors: Ready"`
+
 #### Page 2: Status Screen (SCREEN_STATUS)
 
-Shows WiFi and system status details.
+Shows system status and uptime details. WiFi/IP removed (already shown on Page 1).
 
 ```
 ┌───────────────────────────────┐
 │           STATUS              │  Header
 ├───────────────────────────────┤
-│WiFi: Connected                │  WiFi status
-│IP: 192.168.1.100              │  IP address
+│Uptime: 2d 5h 32m              │  System uptime
 │Web Dashboard: ON              │  Web server status
 │History: 15/30 pts             │  Data buffer status
 │Avg samples: 45/60             │  Current averaging progress
+│                               │
 └───────────────────────────────┘
         128 × 64 pixels (5x8 font)
 ```
@@ -359,6 +363,8 @@ Using 128x64 LCD instead of color TFT saves significant memory.
 | BUTTON | GPIO 0 | D3 | Input | Internal pull-up, FLASH button |
 | **LCD Backlight** |
 | LCD_BACKLIGHT | GPIO 3 | RX | Output | Backlight control via 47Ω resistor |
+| **Audio Alert** |
+| BUZZER | GPIO 10 | SD3 | Output | Passive buzzer for Geiger counter effect |
 
 **Note:** GPIO 0 is the FLASH button on most NodeMCU boards. It has an internal pull-up and can be used as a regular button input when not in programming mode.
 
@@ -498,15 +504,122 @@ The ST7920 is a common 128x64 LCD controller. We use **serial mode** to minimize
     it affect programming mode (hold LOW during reset = flash mode).
 ```
 
+### 5.5 Buzzer Wiring
+
+```
+    Buzzer Wiring (using GPIO 10 / SD3)
+    ════════════════════════════════════
+    
+    A 3-pin passive buzzer module is connected to GPIO 10 for audio alerts.
+    The buzzer produces Geiger counter-like clicks when room sensor readings
+    exceed warning thresholds, and alarm beeps when room sensor has error.
+    
+    NodeMCU                    3-Pin Buzzer Module
+    ┌─────┐                   ┌─────────────────┐
+    │     │                   │  VCC  GND  SIG  │
+    │ 3V3 ├───────────────────┤   ○             │
+    │ GND ├───────────────────┤        ○        │
+    │ SD3 ├───────────────────┤             ○   │
+    │     │   (GPIO 10)       │                 │
+    └─────┘                   └─────────────────┘
+    
+    WHY 3-PIN MODULE?
+    A 3-pin buzzer module includes a transistor driver circuit.
+    This prevents GPIO pin overload (ESP8266 GPIO can only source ~12mA).
+    The VCC pin powers the driver, SIG pin just triggers it.
+    
+    Note: Use a PASSIVE buzzer module (not active). Passive buzzers
+    require a PWM signal to produce sound, allowing frequency control.
+    Active buzzers have built-in oscillators and only produce a fixed tone.
+```
+
 ---
 
-## 6. Web Dashboard
+## 6. Audio Alert System
 
-### 6.1 Overview
+### 6.1 Geiger Counter Effect
+
+The VOC Monitor includes an audio alert system that mimics a Geiger counter. When room sensor readings exceed warning thresholds, the buzzer produces random clicks - the higher the readings, the more frequent the clicks.
+
+### 6.2 Alert Thresholds
+
+The buzzer activates when **room sensor** readings exceed these thresholds:
+
+| Metric | Warning Threshold | Maximum (fastest clicking) |
+|--------|-------------------|---------------------------|
+| TVOC | > 500 ppb | 2000 ppb |
+| eCO2 | > 1000 ppm | 5000 ppm |
+
+**Note:** Only room sensor readings trigger the buzzer, as this indicates VOC leakage into the ambient environment (safety concern).
+
+### 6.3 Click Frequency Calculation
+
+The click interval is calculated based on severity:
+
+```
+Severity = max(TVOC_severity, eCO2_severity)
+
+Where:
+  TVOC_severity = (roomTVOC - 500) / (2000 - 500)  [0.0 to 1.0]
+  eCO2_severity = (roomECO2 - 1000) / (5000 - 1000) [0.0 to 1.0]
+
+Click Interval = 2000ms - (severity × 1950ms) ± 30% random
+
+Result:
+  - At threshold (severity = 0): ~2000ms between clicks (slow)
+  - At maximum (severity = 1): ~50ms between clicks (rapid)
+```
+
+### 6.4 Buzzer Parameters
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Click Frequency | 4000 Hz | Tone frequency for each click |
+| Click Duration | 2 ms | Very short click (Geiger counter style) |
+| Min Interval | 50 ms | Fastest clicking rate |
+| Max Interval | 2000 ms | Slowest clicking rate |
+| Randomness | ±30% | Added to interval for authentic feel |
+
+### 6.5 Alarm Mode (Room Sensor Error)
+
+When the room sensor is disconnected or has an error, the system enters **alarm mode**. This is a critical safety alert because a disconnected room sensor means VOC leakage cannot be detected.
+
+**Alarm Behavior:**
+- **Buzzer**: 1000 Hz tone, 1 second ON / 1 second OFF (beeping pattern)
+- **Display**: "ERROR" text flashes in sync with beep (inverted ↔ normal)
+
+| Alarm Phase | Buzzer | ERROR Text Display |
+|-------------|--------|-------------------|
+| ON (1 sec) | 1000 Hz tone | Inverted (white on black) |
+| OFF (1 sec) | Silent | Normal (black on white) |
+
+**Implementation:**
+The alarm interval (1000ms) is synchronized with the sensor read interval (1000ms), so the display update naturally syncs with the alarm flashing. The alarm state is calculated once per loop iteration:
+```
+alarmOn = ((millis() - alarmStartTimestamp) / BUZZER_ALARM_INTERVAL) % 2 == 0
+```
+This ensures buzzer and display are always synchronized, and avoids redundant display redraws.
+
+### 6.6 Behavior Summary
+
+| Room Sensor State | Buzzer Behavior | Display |
+|-------------------|-----------------|---------|
+| **Disconnected/Error** | **1kHz beep (1 sec ON/OFF)** | **ERROR flashes** |
+| Below thresholds | Silent | Normal readings |
+| TVOC > 500 ppb OR eCO2 > 1000 ppm | Slow clicking (~1-2 sec intervals) | Normal readings |
+| TVOC > 1000 ppb OR eCO2 > 2500 ppm | Medium clicking (~0.5 sec intervals) | Normal readings |
+| TVOC > 1500 ppb OR eCO2 > 4000 ppm | Rapid clicking (~0.1 sec intervals) | Normal readings |
+| TVOC ≥ 2000 ppb OR eCO2 ≥ 5000 ppm | Very rapid clicking (~50ms intervals) | Normal readings |
+
+---
+
+## 7. Web Dashboard
+
+### 7.1 Overview
 
 The VOC Monitor includes a built-in web dashboard accessible via WiFi. The ESP8266 serves a responsive HTML page with real-time charts using Chart.js.
 
-### 6.2 Architecture
+### 7.2 Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -530,7 +643,7 @@ The VOC Monitor includes a built-in web dashboard accessible via WiFi. The ESP82
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 6.3 Data Flow
+### 7.3 Data Flow
 
 ```
 Sensor Reading (1 Hz)
@@ -556,7 +669,7 @@ Sensor Reading (1 Hz)
 └───────────────────┘
 ```
 
-### 6.4 Memory Usage
+### 7.4 Memory Usage
 
 | Component | Size | Notes |
 |-----------|------|-------|
@@ -565,7 +678,7 @@ Sensor Reading (1 Hz)
 | HTML page | ~2.5 KB | Stored in PROGMEM (flash), minified |
 | **Total RAM** | ~550 bytes | Plus temporary stream buffers |
 
-### 6.5 ESPAsyncWebServer
+### 7.5 ESPAsyncWebServer
 
 The web server uses `ESPAsyncWebServer` library for non-blocking operation:
 
@@ -583,9 +696,9 @@ void loop() {
 
 ---
 
-## 7. API Reference
+## 8. API Reference
 
-### 7.1 Endpoints
+### 8.1 Endpoints
 
 | Endpoint | Method | Response | Description |
 |----------|--------|----------|-------------|
@@ -593,7 +706,7 @@ void loop() {
 | `/api/current` | GET | JSON | Current running average values |
 | `/api/data` | GET | JSON | Historical data (30 points) |
 
-### 7.2 `/api/current` Response
+### 8.2 `/api/current` Response
 
 Returns current sensor values. If sensor is disconnected, returns `"Error"`. If no data yet, returns `"N/A"`.
 
@@ -611,7 +724,7 @@ Returns current sensor values. If sensor is disconnected, returns `"Error"`. If 
 }
 ```
 
-### 7.3 `/api/data` Response
+### 8.3 `/api/data` Response
 
 Returns historical data array (oldest to newest, up to 30 points):
 
@@ -623,18 +736,35 @@ Returns historical data array (oldest to newest, up to 30 points):
 ]
 ```
 
-### 7.4 Client Refresh Rates
+### 8.4 Client Refresh Rates
 
 | Data | Refresh Interval | Reason |
 |------|------------------|--------|
 | Current values | 5 seconds | Near real-time display |
 | History chart | 30 seconds | Data only changes every 60 seconds |
 
+### 8.5 Chart Configuration
+
+The web dashboard displays two charts for TVOC and eCO2 historical data.
+
+**Chart Settings:**
+- **Height**: 200px (for better readability)
+- **Y-axis limits**: Capped to prevent error values (65535) from breaking the scale
+
+| Chart | Y-axis Max | Reasoning |
+|-------|------------|-----------|
+| TVOC | 2,000 ppb | >1000 ppb is very poor air quality, >2000 is extreme |
+| eCO2 | 4,000 ppm | >2000 ppm is poor, >5000 is dangerous |
+
+**Error Value Handling:**
+- Sensor error values (65535/65536) are filtered out and replaced with `null`
+- Chart.js skips `null` values, preventing broken Y-axis scaling
+
 ---
 
-## 8. Development Environment
+## 9. Development Environment
 
-### 8.1 PlatformIO Configuration
+### 9.1 PlatformIO Configuration
 
 ```ini
 ; platformio.ini
@@ -657,7 +787,7 @@ build_flags =
     -DCORE_DEBUG_LEVEL=3
 ```
 
-### 8.2 How to Compile
+### 9.2 How to Compile
 
 ```bash
 # Build
@@ -670,7 +800,7 @@ pio run --target upload
 pio device monitor
 ```
 
-### 8.3 Required Libraries
+### 9.3 Required Libraries
 
 | Library | Purpose |
 |---------|---------|
@@ -683,9 +813,9 @@ pio device monitor
 
 ---
 
-## 9. Bill of Materials
+## 10. Bill of Materials
 
-### 9.1 Required Components
+### 10.1 Required Components
 
 | Component | Model/Spec | Qty | Notes |
 |-----------|------------|-----|-------|
@@ -693,9 +823,10 @@ pio device monitor
 | VOC Sensor Module | ENS160 + AHT20 Combo | 2 | I2C |
 | Display | ST7920 128x64 LCD | 1 | Serial mode |
 | Button | 6mm Tactile Switch | 1 | Momentary |
+| Buzzer | Passive Buzzer 3-5V | 1 | For Geiger counter audio alert |
 | Power Supply | 5V 1A USB | 1 | |
 
-### 9.2 Wire Count Summary
+### 10.2 Wire Count Summary
 
 | Connection | Wires |
 |------------|-------|
@@ -707,27 +838,29 @@ pio device monitor
 
 ---
 
-## 10. Assembly & Testing
+## 11. Assembly & Testing
 
-### 10.1 Assembly Checklist
+### 11.1 Assembly Checklist
 
 - [ ] Wire I2C Bus 1 (D1/D2) to Chamber ENS160+AHT20
 - [ ] Wire I2C Bus 2 (D5/D6) to Room ENS160+AHT20
 - [ ] Connect LCD via Software SPI (D0, D4, D7, D8) + Backlight (RX via 47Ω)
 - [ ] Wire button between D3 (GPIO 0) and GND
+- [ ] Wire buzzer between SD3 (GPIO 10) and GND
 - [ ] Connect 5V power via USB
 
-### 10.2 Testing Procedure
+### 11.2 Testing Procedure
 
 1. **I2C Scan** - Verify 0x38 and 0x52 on both buses
 2. **LCD Test** - Verify display shows text
 3. **Sensor Test** - Breathe on sensors, verify readings change
 4. **Button Test** - Verify screen cycling
 5. **WiFi Test** - Verify connection and web dashboard
+6. **Buzzer Test** - Breathe on room sensor to raise TVOC, verify clicking sound
 
 ---
 
-## 11. References
+## 12. References
 
 - [ENS160 Datasheet](https://www.sciosense.com/products/environmental-sensors/ens160-digital-metal-oxide-multi-gas-sensor/)
 - [AHT20 Datasheet](http://www.aosong.com/en/products-32.html)

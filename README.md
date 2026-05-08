@@ -1,4 +1,4 @@
-# VoC Monitor for 3D Printer Enclosures
+# VOC Monitor for 3D Printer Enclosures
 
 A standalone VOC (Volatile Organic Compounds) monitoring system for 3D printer enclosures, built on ESP32 with a 128x64 ST7920 LCD.
 
@@ -98,7 +98,7 @@ The ST7920 is a common 128x64 LCD used in 3D printers (like the Ender 3 stock di
 
 #### Step 1: Clone/Download the Project
 ```bash
-cd VoC-monitor
+cd VOC-monitor
 ```
 
 #### Step 2: Connect ESP32 to Computer
@@ -141,7 +141,7 @@ pio device monitor
 
 You should see:
 ```
-=== VoC Monitor UI Demo ===
+=== VOC Monitor UI Demo ===
 
 Display initialized
 Free heap: 280000 bytes
@@ -190,7 +190,7 @@ WiFi is disabled in the UI demo. To enable:
 ## Project Structure
 
 ```
-VoC-monitor/
+VOC-monitor/
 ├── platformio.ini          # Build configuration
 ├── include/
 │   ├── config.h            # Pin definitions, constants

@@ -1,5 +1,5 @@
 /**
- * VoC Monitor - Environmental Monitoring System
+ * VOC Monitor - Environmental Monitoring System
  * 
  * Reads from ENS160+AHT20 (chamber & room) sensors,
  * displays on ST7920 128x64 LCD, serves web dashboard.
@@ -121,11 +121,96 @@ uint8_t sampleCount = 0;
 ScreenState currentScreen = SCREEN_MAIN;
 volatile bool screenChanged = false;
 volatile bool buttonPressed = false;
+unsigned long sensorsValidSince = 0;  // Timestamp when both sensors became valid (0 = not valid)
+
+// =============================================================================
+// Buzzer State (Geiger counter effect + Alarm)
+// =============================================================================
+unsigned long lastClickTime = 0;
+unsigned long nextClickInterval = 0;
+#define BUZZER_CLICK_FREQ    4000   // Hz - click tone frequency
+#define BUZZER_CLICK_DURATION 2     // ms - very short click like Geiger counter
+#define BUZZER_MIN_INTERVAL  50     // ms - fastest clicking (high radiation)
+#define BUZZER_MAX_INTERVAL  2000   // ms - slowest clicking (threshold level)
+
+// Alarm state (for room sensor error)
+#define BUZZER_ALARM_FREQ     1000  // Hz - alarm tone frequency
+#define BUZZER_ALARM_INTERVAL 1000  // ms - beep on/off interval (synced with sensor read)
+unsigned long alarmStartTimestamp = 0;
+bool alarmOn = false;  // Updated once per loop, used by buzzer and display
 
 // =============================================================================
 // Forward Declarations
 // =============================================================================
 void drawBootScreen(const char* status, uint8_t progress = 0);
+void scanI2C(int sda, int scl);
+void updateBuzzer();
+
+// =============================================================================
+// Buzzer - Geiger Counter Effect
+// =============================================================================
+// Calculate click interval based on room sensor severity
+// Higher readings = shorter interval = more frequent clicks
+unsigned long calculateClickInterval() {
+    if (!data.roomValid) return 0;  // No clicking if sensor invalid
+    
+    // Calculate severity ratio (0.0 = at threshold, 1.0 = at max)
+    float tvocSeverity = 0;
+    float eco2Severity = 0;
+    
+    if (data.roomTVOC > TVOC_WARNING) {
+        tvocSeverity = (float)(data.roomTVOC - TVOC_WARNING) / (float)(TVOC_MAX - TVOC_WARNING);
+        tvocSeverity = constrain(tvocSeverity, 0.0f, 1.0f);
+    }
+    
+    if (data.roomECO2 > ECO2_WARNING) {
+        eco2Severity = (float)(data.roomECO2 - ECO2_WARNING) / (float)(ECO2_MAX - ECO2_WARNING);
+        eco2Severity = constrain(eco2Severity, 0.0f, 1.0f);
+    }
+    
+    // Use the higher severity
+    float severity = max(tvocSeverity, eco2Severity);
+    
+    if (severity <= 0) return 0;  // Below threshold, no clicking
+    
+    // Map severity to interval: high severity = short interval
+    // Add randomness for authentic Geiger counter feel
+    unsigned long baseInterval = BUZZER_MAX_INTERVAL - (unsigned long)(severity * (BUZZER_MAX_INTERVAL - BUZZER_MIN_INTERVAL));
+    
+    // Add ±30% randomness
+    long randomOffset = (long)(baseInterval * 0.3) - random(0, (long)(baseInterval * 0.6));
+    unsigned long interval = baseInterval + randomOffset;
+    
+    return constrain(interval, BUZZER_MIN_INTERVAL, BUZZER_MAX_INTERVAL);
+}
+
+// Update buzzer - handles both alarm mode and Geiger counter mode
+void updateBuzzer() {
+    // ALARM MODE: Room sensor error - continuous beep pattern
+    if (!data.roomValid) {
+        if (alarmOn) {
+            tone(BUZZER_PIN, BUZZER_ALARM_FREQ);  // Continuous tone while alarmOn
+        } else {
+            noTone(BUZZER_PIN);
+        }
+        return;  // Skip Geiger counter mode
+    }
+    
+    // GEIGER MODE: Room sensor valid - click based on readings
+    noTone(BUZZER_PIN);  // Ensure alarm tone is off
+    
+    unsigned long now = millis();
+    if (now - lastClickTime >= nextClickInterval) {
+        nextClickInterval = calculateClickInterval();
+        
+        if (nextClickInterval > 0) {
+            // Make a short click sound
+            tone(BUZZER_PIN, BUZZER_CLICK_FREQ, BUZZER_CLICK_DURATION);
+        }
+        
+        lastClickTime = now;
+    }
+}
 
 // =============================================================================
 // WiFi and Web Server
@@ -263,6 +348,40 @@ void setBacklight(bool on) {
 }
 
 // =============================================================================
+// I2C Scanner - Diagnose connected devices
+// =============================================================================
+void scanI2C(int sda, int scl) {
+    Wire.begin(sda, scl);
+    delay(100);
+    
+    Serial.printf("Scanning I2C bus (SDA=%d, SCL=%d)...\n", sda, scl);
+    
+    int deviceCount = 0;
+    for (uint8_t addr = 1; addr < 127; addr++) {
+        Wire.beginTransmission(addr);
+        uint8_t error = Wire.endTransmission();
+        
+        if (error == 0) {
+            Serial.printf("  Found device at 0x%02X", addr);
+            
+            // Identify known devices
+            if (addr == 0x38) Serial.print(" (AHT20/AHT21)");
+            else if (addr == 0x52) Serial.print(" (ENS160 - default addr)");
+            else if (addr == 0x53) Serial.print(" (ENS160 - alternate addr)");
+            
+            Serial.println();
+            deviceCount++;
+        }
+    }
+    
+    if (deviceCount == 0) {
+        Serial.println("  No devices found!");
+    } else {
+        Serial.printf("Scan complete. Found %d device(s).\n", deviceCount);
+    }
+}
+
+// =============================================================================
 // Read All Sensors
 // =============================================================================
 void readSensors() {
@@ -344,10 +463,30 @@ void updateRunningAverage() {
 }
 
 // =============================================================================
+// Uptime Helper
+// =============================================================================
+#define WARMUP_MINUTES 60  // ENS160 needs ~60 minutes to stabilize
+
+void formatUptime(char* buf, size_t bufSize) {
+    unsigned long uptimeSec = millis() / 1000;
+    unsigned long days = uptimeSec / 86400;
+    unsigned long hours = (uptimeSec % 86400) / 3600;
+    unsigned long minutes = (uptimeSec % 3600) / 60;
+    
+    if (days > 0) {
+        snprintf(buf, bufSize, "%lud %luh %lum", days, hours, minutes);
+    } else if (hours > 0) {
+        snprintf(buf, bufSize, "%luh %lum", hours, minutes);
+    } else {
+        snprintf(buf, bufSize, "%lum", minutes);
+    }
+}
+
+// =============================================================================
 // Display Functions
 // =============================================================================
 void drawMainScreen() {
-    char buf[16];
+    char buf[24];
     int textWidth;
     u8g2.setFont(u8g2_font_5x8_tf);
     
@@ -375,10 +514,26 @@ void drawMainScreen() {
         u8g2.drawStr(2, 40, buf);
     } else {
         u8g2.drawStr(2, 20, "TVOC:");
-        u8g2.drawStr(42, 20, "ERR");
+        // Draw "ERROR" in inverted color (white on black)
+        u8g2.setDrawColor(1);
+        u8g2.drawBox(36, 12, 26, 10);
+        u8g2.setDrawColor(0);
+        u8g2.drawStr(37, 20, "ERROR");
+        u8g2.setDrawColor(1);
+        
         u8g2.drawStr(2, 30, "eCO2:");
-        u8g2.drawStr(42, 30, "ERR");
-        u8g2.drawStr(2, 40, "DISCONNECTED");
+        u8g2.setDrawColor(1);
+        u8g2.drawBox(36, 22, 26, 10);
+        u8g2.setDrawColor(0);
+        u8g2.drawStr(37, 30, "ERROR");
+        u8g2.setDrawColor(1);
+        
+        // Draw "ERROR" in inverted color
+        u8g2.setDrawColor(1);
+        u8g2.drawBox(1, 32, 62, 10);
+        u8g2.setDrawColor(0);
+        u8g2.drawStr(2, 40, "ERROR");
+        u8g2.setDrawColor(1);
     }
     
     // Room column
@@ -396,27 +551,59 @@ void drawMainScreen() {
         snprintf(buf, sizeof(buf), "T:%dC RH:%d%%", data.roomTemp, data.roomHumidity);
         u8g2.drawStr(66, 40, buf);
     } else {
+        // Room sensor error - flash ERROR text in sync with alarm beep
         u8g2.drawStr(66, 20, "TVOC:");
-        u8g2.drawStr(106, 20, "ERR");
         u8g2.drawStr(66, 30, "eCO2:");
-        u8g2.drawStr(106, 30, "ERR");
-        u8g2.drawStr(66, 40, "DISCONNECTED");
+        
+        if (alarmOn) {
+            // Inverted: white text on black background (alarm ON phase)
+            u8g2.setDrawColor(1);
+            u8g2.drawBox(100, 12, 26, 10);
+            u8g2.setDrawColor(0);
+            u8g2.drawStr(101, 20, "ERROR");
+            u8g2.setDrawColor(1);
+            
+            u8g2.drawBox(100, 22, 26, 10);
+            u8g2.setDrawColor(0);
+            u8g2.drawStr(101, 30, "ERROR");
+            u8g2.setDrawColor(1);
+            
+            u8g2.drawBox(65, 32, 62, 10);
+            u8g2.setDrawColor(0);
+            u8g2.drawStr(66, 40, "ERROR");
+            u8g2.setDrawColor(1);
+        } else {
+            // Normal: black text on white background (alarm OFF phase)
+            u8g2.drawStr(101, 20, "ERROR");
+            u8g2.drawStr(101, 30, "ERROR");
+            u8g2.drawStr(66, 40, "ERROR");
+        }
     }
     
-    // WiFi status
+    // WiFi status line
     #if WIFI_ENABLED
     if (wifiConnected) {
-        u8g2.drawStr(2, 52, "WiFi: Connected");
-        snprintf(buf, sizeof(buf), "IP: %s", WiFi.localIP().toString().c_str());
-        u8g2.drawStr(2, 62, buf);
+        snprintf(buf, sizeof(buf), "WiFi: %s", WiFi.localIP().toString().c_str());
+        u8g2.drawStr(2, 52, buf);
     } else {
         u8g2.drawStr(2, 52, "WiFi: Disconnected");
-        u8g2.drawStr(2, 62, "IP: ---.---.---.---");
     }
     #else
     u8g2.drawStr(2, 52, "WiFi: Disabled");
-    u8g2.drawStr(2, 62, "IP: N/A");
     #endif
+    
+    // Sensor warmup status line
+    if (sensorsValidSince == 0) {
+        u8g2.drawStr(2, 62, "Sensors: Error");
+    } else {
+        unsigned long validMinutes = (millis() - sensorsValidSince) / 60000;
+        if (validMinutes < WARMUP_MINUTES) {
+            snprintf(buf, sizeof(buf), "Sensors: Warming %dm", WARMUP_MINUTES - (int)validMinutes);
+            u8g2.drawStr(2, 62, buf);
+        } else {
+            u8g2.drawStr(2, 62, "Sensors: Ready");
+        }
+    }
 }
 
 // =============================================================================
@@ -446,36 +633,30 @@ void drawBootScreen(const char* status, uint8_t progress) {
 }
 
 void drawStatusScreen() {
+    char buf[26];
     u8g2.setFont(u8g2_font_5x8_tf);
     
     u8g2.drawFrame(0, 0, 128, 64);
     u8g2.drawHLine(0, 10, 128);
     u8g2.drawStr(45, 8, "STATUS");
     
-    #if WIFI_ENABLED
-    char buf[26];
-    snprintf(buf, sizeof(buf), "WiFi: %s", wifiConnected ? "Connected" : "Disconnected");
+    // Uptime display
+    char uptimeStr[16];
+    formatUptime(uptimeStr, sizeof(uptimeStr));
+    snprintf(buf, sizeof(buf), "Uptime: %s", uptimeStr);
     u8g2.drawStr(2, 20, buf);
     
-    if (wifiConnected) {
-        snprintf(buf, sizeof(buf), "IP: %s", WiFi.localIP().toString().c_str());
-    } else {
-        snprintf(buf, sizeof(buf), "IP: ---.---.---.---");
-    }
-    u8g2.drawStr(2, 30, buf);
-    
-    u8g2.drawStr(2, 40, "Web Dashboard: ON");
-    snprintf(buf, sizeof(buf), "History: %d/%d pts", historyCount, HISTORY_SIZE);
-    u8g2.drawStr(2, 50, buf);
-    snprintf(buf, sizeof(buf), "Avg samples: %d/60", sampleCount);
-    u8g2.drawStr(2, 60, buf);
+    #if WIFI_ENABLED
+    u8g2.drawStr(2, 30, "Web Dashboard: ON");
     #else
-    u8g2.drawStr(2, 20, "WiFi: Disabled");
-    u8g2.drawStr(2, 30, "IP: N/A");
-    u8g2.drawStr(2, 40, "Web Dashboard: OFF");
-    u8g2.drawStr(2, 50, "History: N/A");
-    u8g2.drawStr(2, 60, "");
+    u8g2.drawStr(2, 30, "Web Dashboard: OFF");
     #endif
+    
+    snprintf(buf, sizeof(buf), "History: %d/%d pts", historyCount, HISTORY_SIZE);
+    u8g2.drawStr(2, 40, buf);
+    
+    snprintf(buf, sizeof(buf), "Avg samples: %d/60", sampleCount);
+    u8g2.drawStr(2, 50, buf);
 }
 
 void updateDisplay() {
@@ -513,6 +694,10 @@ void setup() {
     pinMode(LCD_BACKLIGHT, OUTPUT);
     digitalWrite(LCD_BACKLIGHT, HIGH);
     
+    // Buzzer
+    pinMode(BUZZER_PIN, OUTPUT);
+    digitalWrite(BUZZER_PIN, LOW);
+    
     // LCD
     Serial.println("Initializing LCD...");
     u8g2.begin();
@@ -521,18 +706,32 @@ void setup() {
     // Show boot screen
     drawBootScreen("Initializing...", 0);
     
+    // Scan I2C buses to help diagnose connection issues
+    Serial.println("\n--- I2C Bus Scan ---");
+    drawBootScreen("Scanning I2C bus 1...", 1);
+    scanI2C(I2C1_SDA, I2C1_SCL);
+    
+    drawBootScreen("Scanning I2C bus 2...", 2);
+    scanI2C(I2C2_SDA, I2C2_SCL);
+    Serial.println("--- End I2C Scan ---\n");
+    
     // Chamber sensors (I2C1)
     Serial.println("Initializing Chamber sensors...");
-    drawBootScreen("Init chamber sensors...", 1);
+    drawBootScreen("Init chamber sensors...", 3);
     Wire.begin(I2C1_SDA, I2C1_SCL);
     delay(100);
     
+    // Try default address first, then alternate address for ENS160
     if (chamberENS.begin(Wire, ENS160_ADDR)) {
-        Serial.println("Chamber ENS160: OK");
+        Serial.printf("Chamber ENS160: OK (addr 0x%02X)\n", ENS160_ADDR);
+        chamberENS.setOperatingMode(SFE_ENS160_STANDARD);
+        data.chamberValid = true;
+    } else if (chamberENS.begin(Wire, ENS160_ADDR_ALT)) {
+        Serial.printf("Chamber ENS160: OK (addr 0x%02X - alternate)\n", ENS160_ADDR_ALT);
         chamberENS.setOperatingMode(SFE_ENS160_STANDARD);
         data.chamberValid = true;
     } else {
-        Serial.println("Chamber ENS160: NOT FOUND");
+        Serial.println("Chamber ENS160: NOT FOUND (tried 0x52 and 0x53)");
     }
     
     if (chamberAHT.begin(&Wire, 0, AHT20_ADDR)) {
@@ -543,16 +742,21 @@ void setup() {
     
     // Room sensors (I2C2)
     Serial.println("Initializing Room sensors...");
-    drawBootScreen("Init room sensors...", 2);
+    drawBootScreen("Init room sensors...", 4);
     Wire.begin(I2C2_SDA, I2C2_SCL);
     delay(100);
     
+    // Try default address first, then alternate address for ENS160
     if (roomENS.begin(Wire, ENS160_ADDR)) {
-        Serial.println("Room ENS160: OK");
+        Serial.printf("Room ENS160: OK (addr 0x%02X)\n", ENS160_ADDR);
+        roomENS.setOperatingMode(SFE_ENS160_STANDARD);
+        data.roomValid = true;
+    } else if (roomENS.begin(Wire, ENS160_ADDR_ALT)) {
+        Serial.printf("Room ENS160: OK (addr 0x%02X - alternate)\n", ENS160_ADDR_ALT);
         roomENS.setOperatingMode(SFE_ENS160_STANDARD);
         data.roomValid = true;
     } else {
-        Serial.println("Room ENS160: NOT FOUND");
+        Serial.println("Room ENS160: NOT FOUND (tried 0x52 and 0x53)");
     }
     
     if (roomAHT.begin(&Wire, 0, AHT20_ADDR)) {
@@ -573,7 +777,11 @@ void setup() {
     updateDisplay();
     
     Serial.println("Ready. Press button to cycle screens.");
-    Serial.println("Web dashboard available at http://<device-ip>/");
+    #if WIFI_ENABLED
+    if (wifiConnected) {
+        Serial.printf("Web dashboard available at http://%s/\n", WiFi.localIP().toString().c_str());
+    }
+    #endif
 }
 
 // =============================================================================
@@ -581,15 +789,39 @@ void setup() {
 // =============================================================================
 void loop() {
     static unsigned long lastRead = 0;
+    unsigned long now = millis();
     
     #if WIFI_ENABLED
     wifiConnected = (WiFi.status() == WL_CONNECTED);
     #endif
     
-    // Read sensors every 1 second
-    if (millis() - lastRead >= SENSOR_READ_INTERVAL) {
-        lastRead = millis();
+    // Calculate alarm state ONCE per loop iteration (for consistency)
+    if (!data.roomValid) {
+        if (alarmStartTimestamp == 0) {
+            alarmStartTimestamp = now;  // Start alarm timer
+        }
+        // Divide elapsed time by alarm interval, check if even (ON) or odd (OFF)
+        alarmOn = ((now - alarmStartTimestamp) / BUZZER_ALARM_INTERVAL) % 2 == 0;
+    } else {
+        alarmStartTimestamp = 0;  // Reset when sensor recovers
+        alarmOn = false;
+    }
+    
+    // Read sensors and update display every 1 second
+    // Alarm interval is also 1000ms, so display flashing is naturally synced
+    if (now - lastRead >= SENSOR_READ_INTERVAL) {
+        lastRead = now;
         readSensors();
+        
+        // Track when both sensors became valid (for warmup timer)
+        if (data.chamberValid && data.roomValid) {
+            if (sensorsValidSince == 0) {
+                sensorsValidSince = now;  // Start warmup timer
+            }
+        } else {
+            sensorsValidSince = 0;  // Reset on any error
+        }
+        
         updateRunningAverage();
         updateDisplay();
     }
@@ -603,6 +835,9 @@ void loop() {
         buttonPressed = false;
         Serial.printf("Button pressed! Screen: %d\n", currentScreen);
     }
+    
+    // Update buzzer for alarm and Geiger counter effect
+    updateBuzzer();
     
     delay(50);  // Yield for WiFi stack and async web server
 }
