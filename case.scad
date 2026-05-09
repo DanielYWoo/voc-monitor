@@ -1,7 +1,7 @@
 $fn=360;
 width=180;
 height=100;
-depth=21;
+depth=20;
 lcd_width=80;
 lcd_height=52;
 lcd_depth=9;
@@ -42,12 +42,8 @@ module cover() {
             translate([width/2, height/2, -depth-lcd_depth]) cylinder(r=sqrt(width*width+height*height)/2-1, h = 60);
         }
 
-    }
-    
-    
+    }    
 }
-
-
 
 module trefoil(outradius,height,inRatio,outRatio){
 	inradius = outradius/outRatio;
@@ -106,17 +102,11 @@ module leg() {
     translate([-50/2+12/2, 4, 0]) rotate([0, 90, 0]) cylinder(r=4, h=50);
 }
 
-module sensor() {
-    sensor_width=25;
-    sensor_height=20;
-    sensor_height2=45;
-    
-    
-    
-}
+
 
 //button();
-translate([-width-1,-40,depth+lcd_depth]) cover();
-//back();
+//translate([-width-1,-40,depth+lcd_depth]) cover();
+back();
 //leg();
+
  
