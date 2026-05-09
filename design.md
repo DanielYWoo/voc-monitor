@@ -351,7 +351,7 @@ Using 128x64 LCD instead of color TFT saves significant memory.
 | **ST7920 LCD (Software SPI Mode)** |
 | LCD_CLK (E) | GPIO 16 | D0 | Output | Software SPI clock |
 | LCD_DATA (R/W) | GPIO 13 | D7 | Output | Software SPI data |
-| LCD_CS (RS) | GPIO 15 | D8 | Output | Chip select |
+| LCD_CS (RS) | GPIO 0 | D3 | Output | Chip select (swapped with buzzer) |
 | LCD_RST | GPIO 2 | D4 | Output | Reset (active LOW) |
 | **I2C Bus 1 - Hardware (Chamber)** |
 | I2C1_SDA | GPIO 4 | D2 | Bidirectional | ENS160+AHT20 |
@@ -360,13 +360,15 @@ Using 128x64 LCD instead of color TFT saves significant memory.
 | I2C2_SDA | GPIO 12 | D6 | Bidirectional | ENS160+AHT20 |
 | I2C2_SCL | GPIO 14 | D5 | Output | 100kHz |
 | **User Input** |
-| BUTTON | GPIO 0 | D3 | Input | Internal pull-up, FLASH button |
+| BUTTON | GPIO 1 | TX | Input | Digital interrupt (FALLING edge, internal pull-up) |
 | **LCD Backlight** |
 | LCD_BACKLIGHT | GPIO 3 | RX | Output | Backlight control via 47Ω resistor |
 | **Audio Alert** |
-| BUZZER | GPIO 10 | SD3 | Output | Passive buzzer for Geiger counter effect |
+| BUZZER | GPIO 15 | D8 | Output | Passive buzzer for Geiger counter effect (swapped with LCD_CS) |
 
-**Note:** GPIO 0 is the FLASH button on most NodeMCU boards. It has an internal pull-up and can be used as a regular button input when not in programming mode.
+**Note:** GPIO 1 (TX) is used for button input with interrupt. Serial TX is disabled when using this pin. The button uses internal pull-up and triggers on FALLING edge.
+
+**Note:** GPIO 0 (D3) is now used for LCD_CS. GPIO 15 (D8) is used for buzzer - it has internal pull-down which doesn't affect boot.
 
 **Note:** GPIO 3 (RX) is used for backlight control. Serial TX still works for debug output, but serial input is disabled.
 
@@ -377,18 +379,19 @@ Using 128x64 LCD instead of color TFT saves significant memory.
     
     ┌─────────────────────────────────────────┐
     │  A0     ●  1                  16 ●  D0  │◄── LCD_CLK (GPIO 16)
+    │         │                                │
     │  RSV    ●  2                  15 ●  D1  │◄── I2C1_SCL (GPIO 5)
     │  RSV    ●  3                  14 ●  D2  │◄── I2C1_SDA (GPIO 4)
-    │  SD3    ●  4                  13 ●  D3  │◄── BUTTON (GPIO 0)
+    │  SD3    ●  4                  13 ●  D3  │◄── LCD_CS (GPIO 0)
     │  SD2    ●  5                  12 ●  D4  │◄── LCD_RST (GPIO 2)
     │  SD1    ●  6                  11 ●  3V3 │
     │  CMD    ●  7                  10 ●  GND │
     │  SD0    ●  8                   9 ●  D5  │◄── I2C2_SCL (GPIO 14)
     │  CLK    ●  9                   8 ●  D6  │◄── I2C2_SDA (GPIO 12)
     │  GND    ● 10                   7 ●  D7  │◄── LCD_DATA (GPIO 13)
-    │  3V3    ● 11                   6 ●  D8  │◄── LCD_CS (GPIO 15)
+    │  3V3    ● 11                   6 ●  D8  │◄── BUZZER (GPIO 15)
     │  EN     ● 12                   5 ●  RX  │◄── LCD_BACKLIGHT (GPIO 3)
-    │  RST    ● 13                   4 ●  TX  │
+    │  RST    ● 13                   4 ●  TX  │◄── BUTTON (GPIO 1)
     │  GND    ● 14                   3 ●  GND │
     │  VIN    ● 15                   2 ●  3V3 │
     ├─────────────────────────────────────────┤
@@ -428,7 +431,7 @@ The ST7920 is a common 128x64 LCD controller. We use **serial mode** to minimize
     ┌─────────┬────────────────────────────────────────────────────────┐
     │ LCD Pin │ Function                                               │
     ├─────────┼────────────────────────────────────────────────────────┤
-    │ RS      │ Chip Select (CS) - GPIO 15 (D8)                        │
+    │ RS      │ Chip Select (CS) - GPIO 0 (D3)                         │
     │ R/W     │ Data Line - GPIO 13 (D7)                               │
     │ E       │ Clock - GPIO 16 (D0)                                   │
     │ PSB     │ Mode Select - GND = Serial, VCC = Parallel             │
@@ -446,7 +449,8 @@ The ST7920 is a common 128x64 LCD controller. We use **serial mode** to minimize
     │  VCC (2) ───┼────────────────┤ VIN │  (5V from USB)
     │  GND (1) ───┼────────────────┤ GND │
     │  V0  (3) ───┼────────────────┤ NC  │  (Leave floating)
-    │  RS  (4) ───┼────────────────┤ D8  │  (GPIO 15 - CS)
+    │  RS  (4) ───┼────────────────┤ D3  │  (GPIO 0 - CS)
+    │  RS  (4) ───┼────────────────┤ D3  │  (GPIO 0 - CS)
     │  R/W (5) ───┼────────────────┤ D7  │  (GPIO 13 - Data)
     │  E   (6) ───┼────────────────┤ D0  │  (GPIO 16 - Clock)
     │  PSB(15) ───┼────────────────┤ GND │  (Serial mode)
@@ -480,57 +484,64 @@ The ST7920 is a common 128x64 LCD controller. We use **serial mode** to minimize
 ### 5.4 Button Wiring
 
 ```
-    Button Wiring (using GPIO 0 / D3)
-    ═════════════════════════════════
+    Button Wiring (using TX / GPIO 1 - Digital Interrupt)
+    ═════════════════════════════════════════════════════
     
-    The button is wired between GPIO 0 and GND. GPIO 0 has an internal
-    pull-up resistor, so no external resistor is needed.
+    The button is wired between TX (GPIO 1) and GND. Internal pull-up
+    is enabled, and interrupt triggers on FALLING edge (button press).
     
     NodeMCU                    Button
     ┌─────┐                   ┌─────┐
     │     │                   │     │
-    │ D3  ├───────────────────┤  ○──┼───┐
-    │     │   (GPIO 0)        │     │   │
+    │ TX  ├───────────────────┤  ○──┼───┐
+    │     │   (GPIO 1)        │     │   │
+    │     │                   │     │   │
     │ GND ├───────────────────┤  ○──┼───┘
     │     │                   │     │
     └─────┘                   └─────┘
     
     Button States:
-    - Released: GPIO 0 reads HIGH (pulled up internally)
-    - Pressed: GPIO 0 reads LOW (connected to GND)
+    - Released: GPIO 1 reads HIGH (internal pull-up)
+    - Pressed: GPIO 1 reads LOW (connected to GND)
     
-    Note: GPIO 0 is also the FLASH button on NodeMCU. During normal
-    operation, it works as a regular button. Only during boot does
-    it affect programming mode (hold LOW during reset = flash mode).
+    Detection: Interrupt on FALLING edge with 200ms software debounce.
+    
+    Note: Using TX pin disables Serial output. This is acceptable since
+    the device operates standalone without serial debugging in production.
 ```
 
 ### 5.5 Buzzer Wiring
 
 ```
-    Buzzer Wiring (using GPIO 10 / SD3)
-    ════════════════════════════════════
+    Buzzer Wiring (using GPIO 15 / D8)
+    ═══════════════════════════════════
     
-    A 3-pin passive buzzer module is connected to GPIO 10 for audio alerts.
+    A passive buzzer is connected to GPIO 15 (D8) for audio alerts.
     The buzzer produces Geiger counter-like clicks when room sensor readings
     exceed warning thresholds, and alarm beeps when room sensor has error.
     
-    NodeMCU                    3-Pin Buzzer Module
+    NodeMCU                    Passive Buzzer (2-pin)
     ┌─────┐                   ┌─────────────────┐
-    │     │                   │  VCC  GND  SIG  │
-    │ 3V3 ├───────────────────┤   ○             │
-    │ GND ├───────────────────┤        ○        │
-    │ SD3 ├───────────────────┤             ○   │
-    │     │   (GPIO 10)       │                 │
+    │     │                   │                 │
+    │ D8  ├───────────────────┤  (+)            │
+    │     │   (GPIO 15)       │                 │
+    │ GND ├───────────────────┤  (-)            │
+    │     │                   │                 │
     └─────┘                   └─────────────────┘
     
-    WHY 3-PIN MODULE?
-    A 3-pin buzzer module includes a transistor driver circuit.
-    This prevents GPIO pin overload (ESP8266 GPIO can only source ~12mA).
-    The VCC pin powers the driver, SIG pin just triggers it.
+    PASSIVE BUZZER:
+    A passive buzzer is essentially a tiny speaker. It requires a PWM signal
+    (from tone() function) to produce sound. The frequency of the PWM signal
+    determines the pitch.
     
-    Note: Use a PASSIVE buzzer module (not active). Passive buzzers
-    require a PWM signal to produce sound, allowing frequency control.
-    Active buzzers have built-in oscillators and only produce a fixed tone.
+    WHY GPIO 15?
+    GPIO 15 has an internal pull-down resistor and must be LOW at boot for
+    normal boot mode. This is safe for the buzzer because:
+    - At boot: GPIO 15 is LOW → buzzer silent
+    - After boot: tone() generates PWM → buzzer sounds
+    
+    Note: GPIO 0 was previously used but caused boot issues because external
+    loads on GPIO 0 can pull it LOW, triggering flash mode.
 ```
 
 ---
@@ -547,8 +558,8 @@ The buzzer activates when **room sensor** readings exceed these thresholds:
 
 | Metric | Warning Threshold | Maximum (fastest clicking) |
 |--------|-------------------|---------------------------|
-| TVOC | > 500 ppb | 2000 ppb |
-| eCO2 | > 1000 ppm | 5000 ppm |
+| TVOC | > 50 ppb | 2000 ppb |
+| eCO2 | > 500 ppm | 5000 ppm |
 
 **Note:** Only room sensor readings trigger the buzzer, as this indicates VOC leakage into the ambient environment (safety concern).
 
@@ -560,8 +571,8 @@ The click interval is calculated based on severity:
 Severity = max(TVOC_severity, eCO2_severity)
 
 Where:
-  TVOC_severity = (roomTVOC - 500) / (2000 - 500)  [0.0 to 1.0]
-  eCO2_severity = (roomECO2 - 1000) / (5000 - 1000) [0.0 to 1.0]
+  TVOC_severity = (roomTVOC - 50) / (2000 - 50)  [0.0 to 1.0]
+  eCO2_severity = (roomECO2 - 500) / (5000 - 500) [0.0 to 1.0]
 
 Click Interval = 2000ms - (severity × 1950ms) ± 30% random
 
@@ -574,8 +585,8 @@ Result:
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Click Frequency | 4000 Hz | Tone frequency for each click |
-| Click Duration | 2 ms | Very short click (Geiger counter style) |
+| Click Frequency | 500 Hz | Tone frequency for each click (deep sound) |
+| Click Duration | 3 ms | Very short click (Geiger counter style) |
 | Min Interval | 50 ms | Fastest clicking rate |
 | Max Interval | 2000 ms | Slowest clicking rate |
 | Randomness | ±30% | Added to interval for authentic feel |
@@ -585,12 +596,12 @@ Result:
 When the room sensor is disconnected or has an error, the system enters **alarm mode**. This is a critical safety alert because a disconnected room sensor means VOC leakage cannot be detected.
 
 **Alarm Behavior:**
-- **Buzzer**: 1000 Hz tone, 1 second ON / 1 second OFF (beeping pattern)
+- **Buzzer**: 800 Hz tone, 1 second ON / 1 second OFF (beeping pattern)
 - **Display**: "ERROR" text flashes in sync with beep (inverted ↔ normal)
 
 | Alarm Phase | Buzzer | ERROR Text Display |
 |-------------|--------|-------------------|
-| ON (1 sec) | 1000 Hz tone | Inverted (white on black) |
+| ON (1 sec) | 800 Hz tone | Inverted (white on black) |
 | OFF (1 sec) | Silent | Normal (black on white) |
 
 **Implementation:**
@@ -604,11 +615,11 @@ This ensures buzzer and display are always synchronized, and avoids redundant di
 
 | Room Sensor State | Buzzer Behavior | Display |
 |-------------------|-----------------|---------|
-| **Disconnected/Error** | **1kHz beep (1 sec ON/OFF)** | **ERROR flashes** |
+| **Disconnected/Error** | **800Hz beep (1 sec ON/OFF)** | **ERROR flashes** |
 | Below thresholds | Silent | Normal readings |
-| TVOC > 500 ppb OR eCO2 > 1000 ppm | Slow clicking (~1-2 sec intervals) | Normal readings |
-| TVOC > 1000 ppb OR eCO2 > 2500 ppm | Medium clicking (~0.5 sec intervals) | Normal readings |
-| TVOC > 1500 ppb OR eCO2 > 4000 ppm | Rapid clicking (~0.1 sec intervals) | Normal readings |
+| TVOC > 50 ppb OR eCO2 > 500 ppm | Slow clicking (~2 sec intervals) | Normal readings |
+| TVOC ~500 ppb OR eCO2 ~1500 ppm | Medium clicking (~1 sec intervals) | Normal readings |
+| TVOC ~1000 ppb OR eCO2 ~3000 ppm | Fast clicking (~0.5 sec intervals) | Normal readings |
 | TVOC ≥ 2000 ppb OR eCO2 ≥ 5000 ppm | Very rapid clicking (~50ms intervals) | Normal readings |
 
 ---
@@ -845,8 +856,8 @@ pio device monitor
 - [ ] Wire I2C Bus 1 (D1/D2) to Chamber ENS160+AHT20
 - [ ] Wire I2C Bus 2 (D5/D6) to Room ENS160+AHT20
 - [ ] Connect LCD via Software SPI (D0, D4, D7, D8) + Backlight (RX via 47Ω)
-- [ ] Wire button between D3 (GPIO 0) and GND
-- [ ] Wire buzzer between SD3 (GPIO 10) and GND
+- [ ] Wire button between TX (GPIO 1) and GND (uses internal pull-up)
+- [ ] Wire buzzer between D8 (GPIO 15) and GND
 - [ ] Connect 5V power via USB
 
 ### 11.2 Testing Procedure

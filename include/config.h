@@ -12,7 +12,7 @@
 // ST7920 LCD (128x64) - Software SPI Mode
 #define LCD_CLK   16    // Clock (E pin) - D0
 #define LCD_DATA  13    // Data (R/W pin) - D7
-#define LCD_CS    15    // Chip Select (RS pin) - D8
+#define LCD_CS    0     // Chip Select (RS pin) - D3 (GPIO 0) - swapped with buzzer
 #define LCD_RST   2     // Reset pin - D4
 
 // I2C Bus 1 - Hardware I2C - Chamber sensors (ENS160 + AHT20)
@@ -23,14 +23,15 @@
 #define I2C2_SDA  12    // D6
 #define I2C2_SCL  14    // D5
 
-// User Input
-#define BUTTON_PIN 0    // D3 - FLASH button (active LOW with internal pull-up)
+// User Input - Button on TX (GPIO 1) with interrupt
+#define BUTTON_PIN    1     // TX (GPIO 1) - Button with internal pull-up, interrupt on FALLING edge
+                            // Note: Serial TX is disabled when using this pin for button
 
 // LCD Backlight Control
-#define LCD_BACKLIGHT 3 // D9/RX - Backlight control (HIGH = on, LOW = off)
+#define LCD_BACKLIGHT 3     // RX (GPIO 3) - Backlight control (HIGH = on, LOW = off)
 
 // Buzzer (Passive buzzer for Geiger counter effect)
-#define BUZZER_PIN    10    // SD3 (GPIO 10) - Passive buzzer
+#define BUZZER_PIN    15    // D8 (GPIO 15) - Passive buzzer (swapped with LCD_CS to avoid GPIO 0 boot issue)
 
 // -----------------------------------------------------------------------------
 // I2C Addresses
@@ -55,10 +56,10 @@ enum ScreenState {
 // -----------------------------------------------------------------------------
 // Sensor Thresholds
 // -----------------------------------------------------------------------------
-#define TVOC_MAX      2000    // ppb - max for bar graph
-#define ECO2_MAX      5000    // ppm - max for bar graph
-#define TVOC_WARNING  500     // ppb - warning threshold
-#define ECO2_WARNING  1000    // ppm - warning threshold
+#define TVOC_MAX      2000    // ppb - max for Geiger scaling (fastest clicking)
+#define ECO2_MAX      5000    // ppm - max for Geiger scaling (fastest clicking)
+#define TVOC_WARNING  60      // ppb - warning threshold (Geiger starts clicking)
+#define ECO2_WARNING  500     // ppm - warning threshold (Geiger starts clicking)
 
 // -----------------------------------------------------------------------------
 // Timing
