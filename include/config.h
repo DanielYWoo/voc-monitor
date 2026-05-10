@@ -57,9 +57,9 @@ enum ScreenState {
 // Sensor Thresholds
 // -----------------------------------------------------------------------------
 #define TVOC_MAX      2000    // ppb - max for Geiger scaling (fastest clicking)
-#define ECO2_MAX      5000    // ppm - max for Geiger scaling (fastest clicking)
-#define TVOC_WARNING  60      // ppb - warning threshold (Geiger starts clicking)
-#define ECO2_WARNING  500     // ppm - warning threshold (Geiger starts clicking)
+#define ECO2_MAX      3000    // ppm - max for Geiger scaling (fastest clicking)
+#define TVOC_WARNING  150     // ppb - warning threshold (Geiger starts clicking)
+#define ECO2_WARNING  700     // ppm - warning threshold (Geiger starts clicking)
 
 // -----------------------------------------------------------------------------
 // Timing

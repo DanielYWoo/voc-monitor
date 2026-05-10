@@ -322,10 +322,22 @@ void connectWiFi() {
 // Button uses interrupt on FALLING edge (press detection)
 // GPIO 1 has internal pull-up enabled, button connects to GND
 // Note: Using TX pin disables Serial output
+// Debounce is handled inside ISR to prevent multiple triggers from switch bounce
 volatile bool buttonPressed = false;
+volatile unsigned long lastISRTime = 0;
+volatile bool lastButtonState = true;  // true = HIGH (not pressed), false = LOW (pressed)
 
 void IRAM_ATTR buttonISR() {
-    buttonPressed = true;
+    unsigned long now = millis();
+    bool currentState = digitalRead(BUTTON_PIN);
+    
+    // Only trigger on actual press (HIGH -> LOW transition)
+    // and only if enough time has passed since last valid press
+    if (currentState == LOW && lastButtonState == true && (now - lastISRTime > 500)) {
+        buttonPressed = true;
+        lastISRTime = now;
+    }
+    lastButtonState = currentState;
 }
 
 // =============================================================================
@@ -689,9 +701,9 @@ void setup() {
     // delay(500);
     // Serial.println("\n=== VOC Monitor (ESP8266) ===\n");
     
-    // Button on TX (GPIO 1) - interrupt-based detection
+    // Button on TX (GPIO 1) - interrupt-based detection with state tracking
     pinMode(BUTTON_PIN, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonISR, FALLING);
+    attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonISR, CHANGE);
     
     // Backlight
     pinMode(LCD_BACKLIGHT, OUTPUT);
@@ -769,17 +781,13 @@ void setup() {
 // =============================================================================
 void loop() {
     unsigned long now = millis();
+    bool updateScreen = false;
 
-    // 1. BUTTON - Interrupt-based with debounce
-    static unsigned long lastButtonTime = 0;
+    // 1. BUTTON - Debounce handled in ISR, just process the flag here
     if (buttonPressed) {
         buttonPressed = false;
-        // Debounce: ignore if less than 200ms since last press
-        if (now - lastButtonTime > 200) {
-            lastButtonTime = now;
-            currentScreen = (ScreenState)((currentScreen + 1) % 3);
-            updateDisplay();
-        }
+        currentScreen = (ScreenState)((currentScreen + 1) % 3);
+        updateScreen = true;
     }
 
     // 2. SENSORS & DISPLAY
@@ -797,10 +805,10 @@ void loop() {
             errorBlinkOn = !errorBlinkOn;
             sensorWarmupCountdown = WARMUP_MINUTES * 60;
         }
-        updateDisplay();
     }
 
     // 3. CONTINUOUS TASKS
+    if (updateScreen) updateDisplay();
     updateBuzzer();
     yield(); 
 }
