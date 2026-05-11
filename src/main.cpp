@@ -805,6 +805,7 @@ void loop() {
             errorBlinkOn = !errorBlinkOn;
             sensorWarmupCountdown = WARMUP_MINUTES * 60;
         }
+        updateScreen = true;
     }
 
     // 3. CONTINUOUS TASKS
